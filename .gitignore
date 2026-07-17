@@ -1,0 +1,49 @@
+# Local operating-system metadata
+.DS_Store
+._*
+
+# Private runtime configuration and installer state
+options.conf
+.state/
+install.txt
+install.log
+install-error.log
+*.log
+
+# Downloaded sources, archives, and backups
+src/
+backup/
+backups/
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.zip
+*.gz
+*.bz2
+*.xz
+
+# Certificates, private keys, and signing material
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+certs/
+ssl/
+
+# Editor and temporary files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Internal development records
+.superpowers/
+docs/superpowers/
+task_plan.md
+findings.md
+progress.md
