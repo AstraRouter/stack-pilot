@@ -69,7 +69,7 @@ reset_database_root_password() {
   fi
 
   sql="FLUSH PRIVILEGES; ALTER USER 'root'@'localhost' IDENTIFIED BY $(sql_quote_literal "${password}"); FLUSH PRIVILEGES;"
-  if ! "${client}" -uroot -S "${socket}" -e "${sql}"; then
+  if ! printf '%s\n' "${sql}" | "${client}" -uroot -S "${socket}"; then
     kill "${reset_pid}" >/dev/null 2>&1 || true
     wait "${reset_pid}" >/dev/null 2>&1 || true
     systemctl start "${service}" >/dev/null 2>&1 || true

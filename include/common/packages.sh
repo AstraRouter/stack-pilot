@@ -4,13 +4,17 @@ detect_os() {
   [[ -f /etc/os-release ]] || die "Only Linux distributions with /etc/os-release are supported"
   # shellcheck disable=SC1091
   source /etc/os-release
-  OS_ID="$(printf '%s' "${ID}" | tr '[:upper:]' '[:lower:]')"
-  OS_VERSION_ID="${VERSION_ID%%.*}"
+  OS_ID="$(printf '%s' "${ID:-}" | tr '[:upper:]' '[:lower:]')"
+  OS_VERSION_ID="${VERSION_ID:-}"
+  OS_VERSION_ID="${OS_VERSION_ID%%.*}"
   ARCH="$(uname -m)"
   case "${OS_ID}" in
     ubuntu|debian) PM="apt-get" ;;
-    centos|rhel|rocky|almalinux|fedora|ol|amzn)
+    centos|rocky|almalinux)
       if command_exists dnf; then PM="dnf"; else PM="yum"; fi
+      ;;
+    rhel|fedora|ol|amzn)
+      die "Unsupported operating system: ${OS_ID}. Supported: Ubuntu 22-26, Debian 11-13, CentOS Stream / Rocky Linux / AlmaLinux 8-10 (use Rocky or AlmaLinux for a RHEL-compatible base)."
       ;;
     *) die "Unsupported operating system: ${OS_ID}" ;;
   esac
@@ -23,6 +27,7 @@ supported_os_version() {
   [[ "${os_version}" =~ ^[0-9]+$ ]] || return 1
   case "${os_id}" in
     centos) ((os_version >= 7 && os_version <= 10)) ;;
+    rocky|almalinux) ((os_version >= 8 && os_version <= 10)) ;;
     ubuntu) ((os_version >= 22 && os_version <= 26)) ;;
     debian) ((os_version >= 11 && os_version <= 13)) ;;
     *) return 0 ;;
@@ -33,6 +38,7 @@ validate_supported_os_version() {
   supported_os_version && return 0
   case "${OS_ID:-}" in
     centos) die "Only CentOS 7-10 is supported; detected version: ${OS_VERSION_ID:-unknown}" ;;
+    rocky|almalinux) die "Only Rocky Linux / AlmaLinux 8-10 is supported; detected version: ${OS_VERSION_ID:-unknown}" ;;
     ubuntu) die "Only Ubuntu 22-26 is supported; detected version: ${OS_VERSION_ID:-unknown}" ;;
     debian) die "Only Debian 11-13 is supported; detected version: ${OS_VERSION_ID:-unknown}" ;;
     *) die "Unable to identify the operating system version: ${OS_ID:-unknown} ${OS_VERSION_ID:-unknown}" ;;

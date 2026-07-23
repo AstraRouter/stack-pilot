@@ -64,6 +64,10 @@ run_install() {
     mariadb) has_component mariadb && run_step_once "mariadb:${mariadb_ver}" install_mariadb ;;
     none) ;;
   esac
+  # Persist the (possibly generated) DB password immediately so a later failure can't lose it.
+  case "${db_engine}" in
+    mysql|mariadb) save_runtime_options; save_install_summary ;;
+  esac
   if has_component php; then
     install_php_versions "${php_versions}"
   fi

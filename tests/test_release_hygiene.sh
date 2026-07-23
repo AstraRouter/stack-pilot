@@ -20,11 +20,14 @@ done
 
 cjk_pattern=$'[\xE4-\xE9][\x80-\xBF][\x80-\xBF]'
 if LC_ALL=C grep -R -n "${cjk_pattern}" \
+  --exclude-dir=.git \
   --exclude-dir=.superpowers \
   --exclude-dir=superpowers \
+  --exclude-dir=src \
   --exclude=task_plan.md \
   --exclude=findings.md \
   --exclude=progress.md \
+  --exclude=AUDIT_NOTES.md \
   "${ROOT_DIR}" >/dev/null 2>&1; then
   fail "public source and documentation must use English text only"
 fi

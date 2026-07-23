@@ -16,7 +16,7 @@ install_nginx() {
   download_src "${nginx_url}" "${nginx_url##*/}" "${nginx_sha256:-}"
   local build_dir archive
   archive="${LNMP_SRC_DIR}/${nginx_url##*/}"
-  build_dir="$(mktemp -d)"
+  build_dir="$(make_build_dir)"
   extract_archive "${archive}" "${build_dir}"
 
   pushd "${build_dir}/nginx-${nginx_ver}" >/dev/null
@@ -31,7 +31,7 @@ install_nginx() {
     --with-http_stub_status_module \
     --with-stream \
     --with-stream_ssl_module
-  make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  make -j"$(build_parallelism)"
   make install
   popd >/dev/null
   rm -rf "${build_dir}"

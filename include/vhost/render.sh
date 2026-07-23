@@ -54,7 +54,7 @@ acme_challenge_location_block() {
 EOF
 }
 
-render_vhost_http() {
+render_vhost_http_body() {
   local domain="$1"
   local aliases="${2:-}"
   local root_dir="$3"
@@ -62,13 +62,7 @@ render_vhost_http() {
   local php_version="${5:-84}"
   local force_https="${6:-n}"
   local template="${7:-php}"
-  local conf
-  conf="$(vhost_conf_file "${domain}")"
-  mkdir -p "$(vhost_conf_dir)" "${root_dir}" "${nginx_log_dir}"
-  [[ -f "${root_dir}/index.html" ]] || printf 'It works: %s\n' "${domain}" > "${root_dir}/index.html"
-
-  {
-    cat <<EOF
+  cat <<EOF
 server {
     listen ${nginx_http_port:-80};
     server_name $(server_names "${domain}" "${aliases}");
@@ -78,26 +72,42 @@ server {
     error_log ${nginx_log_dir}/${domain}.error.log;
 
 EOF
-    acme_challenge_location_block "${root_dir}"
-    if [[ "${force_https}" == "y" ]]; then
-      cat <<'EOF'
+  acme_challenge_location_block "${root_dir}"
+  if [[ "${force_https}" == "y" ]]; then
+    cat <<'EOF'
     location / {
         return 301 https://$host$request_uri;
     }
 EOF
-    else
-      cat <<EOF
+  else
+    cat <<EOF
     location / {
         $(vhost_try_files_rule "${template}")
     }
 EOF
-      php_fastcgi_block "${enable_php}" "${php_version}"
-      common_locations_block
-    fi
-    cat <<'EOF'
+    php_fastcgi_block "${enable_php}" "${php_version}"
+    common_locations_block
+  fi
+  cat <<'EOF'
 }
 EOF
-  } > "${conf}"
+}
+
+render_vhost_http() {
+  local domain="$1"
+  local aliases="${2:-}"
+  local root_dir="$3"
+  local enable_php="${4:-y}"
+  local php_version="${5:-84}"
+  local force_https="${6:-n}"
+  local template="${7:-php}"
+  local conf candidate
+  conf="$(vhost_conf_file "${domain}")"
+  mkdir -p "$(vhost_conf_dir)" "${root_dir}" "${nginx_log_dir}"
+  [[ -f "${root_dir}/index.html" ]] || printf 'It works: %s\n' "${domain}" > "${root_dir}/index.html"
+  candidate="$(mktemp)"
+  render_vhost_http_body "${domain}" "${aliases}" "${root_dir}" "${enable_php}" "${php_version}" "${force_https}" "${template}" > "${candidate}"
+  install_vhost_config "${conf}" "${candidate}"
 }
 
 render_vhost_ssl() {
@@ -108,10 +118,10 @@ render_vhost_ssl() {
   local php_version="${5:-84}"
   local force_https="${6:-y}"
   local template="${7:-php}"
-  local conf
+  local conf candidate
   conf="$(vhost_conf_file "${domain}")"
   mkdir -p "$(vhost_conf_dir)" "${root_dir}" "${nginx_log_dir}"
-
+  candidate="$(mktemp)"
   {
     if [[ "${force_https}" == "y" ]]; then
       cat <<EOF
@@ -128,8 +138,7 @@ $(acme_challenge_location_block "${root_dir}")
 
 EOF
     else
-      render_vhost_http "${domain}" "${aliases}" "${root_dir}" "${enable_php}" "${php_version}" "n" "${template}"
-      sed -n '1,$p' "${conf}"
+      render_vhost_http_body "${domain}" "${aliases}" "${root_dir}" "${enable_php}" "${php_version}" "n" "${template}"
       printf '\n'
     fi
     cat <<EOF
@@ -158,5 +167,6 @@ EOF
     cat <<'EOF'
 }
 EOF
-  } > "${conf}"
+  } > "${candidate}"
+  install_vhost_config "${conf}" "${candidate}"
 }

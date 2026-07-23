@@ -81,9 +81,25 @@ backup_redis() {
   printf '%s' "${final}"
 }
 
+backup_dir_is_safe() {
+  local path="${1%/}"
+  [[ -n "${path}" && "${path}" == /* ]] || return 1
+  [[ "${path}" != *'/../'* && "${path}" != */.. && "${path}" != *'/./'* ]] || return 1
+  case "${path}" in
+    /|/bin|/boot|/data|/dev|/etc|/home|/lib|/lib32|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/usr/local|/var|/data/logs|/usr/local/data|/usr/local/services)
+      return 1
+      ;;
+  esac
+  (( ${#path} >= 6 ))
+}
+
 cleanup_backups() {
   local days="${backup_keep_days:-7}"
   [[ "${days}" =~ ^[0-9]+$ ]] || die "backup_keep_days must be a non-negative integer"
   [[ -n "${backup_dir:-}" && -d "${backup_dir}" ]] || return 0
-  find "${backup_dir}" -type f -mtime "+${days}" -delete
+  backup_dir_is_safe "${backup_dir}" || die "Refusing to clean an unsafe backup directory: ${backup_dir}"
+  # Only ever remove backup artifacts we create, never arbitrary files, and never recurse.
+  find "${backup_dir}" -maxdepth 1 -type f \
+    \( -name '*.tar.gz' -o -name '*.sql' -o -name '*.part' \) \
+    -mtime "+${days}" -delete
 }

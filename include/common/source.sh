@@ -36,9 +36,10 @@ download_src() {
   info "Downloading ${url}"
   rm -f "${tmp}"
   if command_exists curl; then
-    curl -fL --retry 3 --connect-timeout 15 -o "${tmp}" "${url}"
+    curl -fL --proto-redir '=https' --retry 3 \
+      --connect-timeout 15 --speed-limit 1024 --speed-time 30 -o "${tmp}" "${url}"
   elif command_exists wget; then
-    wget -O "${tmp}" "${url}"
+    wget --timeout=30 --tries=3 --retry-connrefused -O "${tmp}" "${url}"
   else
     die "curl or wget is required to download source archives"
   fi

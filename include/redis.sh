@@ -20,6 +20,24 @@ redis_service_file_path() {
   printf '%s' "${REDIS_SERVICE_FILE_OVERRIDE:-/etc/systemd/system/redis-server.service}"
 }
 
+redis_auth_env_path() {
+  printf '%s/etc/redis-auth.env' "${redis_install_dir}"
+}
+
+# Store REDISCLI_AUTH in a root:redis 0640 file so redis-cli (ExecStop) can
+# authenticate without the password appearing in argv or a world-readable unit.
+write_redis_auth_env() {
+  local password="${1:-}" path
+  path="$(redis_auth_env_path)"
+  if [[ -n "${password}" ]]; then
+    ( umask 027; printf 'REDISCLI_AUTH=%s\n' "${password}" > "${path}" )
+    chown root:redis "${path}" 2>/dev/null || true
+    chmod 640 "${path}"
+  else
+    rm -f "${path}"
+  fi
+}
+
 redis_install_complete() {
   [[ -x "${redis_install_dir}/bin/redis-server" ]] || return 1
   [[ -x "${redis_install_dir}/bin/redis-cli" ]] || return 1
@@ -54,11 +72,11 @@ install_redis_server() {
 
   download_src "${redis_url}" "${redis_url##*/}" "${redis_sha256:-}"
   archive="${LNMP_SRC_DIR}/${redis_url##*/}"
-  build_dir="$(mktemp -d)"
+  build_dir="$(make_build_dir)"
   extract_archive "${archive}" "${build_dir}"
 
   pushd "${build_dir}/redis-${redis_ver}" >/dev/null
-  make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  make -j"$(build_parallelism)"
   make PREFIX="${redis_install_dir}" install
   popd >/dev/null
   rm -rf "${build_dir}"
@@ -81,6 +99,10 @@ appendonly ${redis_appendonly}
 $(redis_requirepass_line "${redis_pass}")
 EOF
 
+  chown root:redis "${redis_install_dir}/etc/redis.conf" 2>/dev/null || true
+  chmod 640 "${redis_install_dir}/etc/redis.conf"
+  write_redis_auth_env "${redis_pass}"
+
   write_redis_service
   write_component_version_marker "${redis_install_dir}" "${redis_ver}"
   link_executable_to_bin "${redis_install_dir}/bin/redis-cli" redis-cli
@@ -89,11 +111,6 @@ EOF
 }
 
 write_redis_service() {
-  local auth_args shutdown_cmd
-  auth_args="$(redis_cli_auth_args "${redis_password:-}")"
-  shutdown_cmd="${redis_install_dir}/bin/redis-cli"
-  [[ -n "${auth_args}" ]] && shutdown_cmd+=" ${auth_args}"
-  shutdown_cmd+=" shutdown"
   cat > "$(redis_service_file_path)" <<EOF
 [Unit]
 Description=Redis persistent key-value database
@@ -103,8 +120,9 @@ After=network.target
 Type=simple
 User=redis
 Group=redis
+EnvironmentFile=-$(redis_auth_env_path)
 ExecStart=${redis_install_dir}/bin/redis-server ${redis_install_dir}/etc/redis.conf --supervised no --daemonize no
-ExecStop=${shutdown_cmd}
+ExecStop=${redis_install_dir}/bin/redis-cli -p ${redis_port:-6379} shutdown
 LimitNOFILE=65535
 
 [Install]

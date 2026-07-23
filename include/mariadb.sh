@@ -28,7 +28,7 @@ install_mariadb() {
 
   download_src "${url}" "${url##*/}" "${mariadb_sha256:-}"
   archive="${LNMP_SRC_DIR}/${url##*/}"
-  build_dir="$(mktemp -d)"
+  build_dir="$(make_build_dir)"
   extract_archive "${archive}" "${build_dir}"
   extracted="$(find "${build_dir}" -mindepth 1 -maxdepth 1 -type d | head -1)"
 
@@ -58,9 +58,13 @@ EOF
   write_mariadb_service
   link_mariadb_cli_commands
   systemctl_reload_or_restart mariadb
-  sleep 3
-  "${mariadb_install_dir}/bin/mariadb" -uroot -S "${mariadb_sock}" -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${mariadb_password}'; FLUSH PRIVILEGES;" || \
-    "${mariadb_install_dir}/bin/mysqladmin" -uroot -S "${mariadb_sock}" password "${mariadb_password}"
+  local mariadb_client="${mariadb_install_dir}/bin/mariadb"
+  [[ -x "${mariadb_client}" ]] || mariadb_client="${mariadb_install_dir}/bin/mysql"
+  wait_for_database_ready "${mariadb_client}" "${mariadb_sock}" \
+    || die "MariaDB did not become ready on ${mariadb_sock}; inspect ${mariadb_log_dir}/error.log"
+  printf "ALTER USER 'root'@'localhost' IDENTIFIED BY %s; FLUSH PRIVILEGES;\n" "$(sql_quote_literal "${mariadb_password}")" \
+    | "${mariadb_client}" -uroot -S "${mariadb_sock}" \
+    || die "Failed to set the MariaDB root password; once MariaDB is running set it with: ./reset-password.sh mariadb"
   write_component_version_marker "${mariadb_install_dir}" "${mariadb_ver}"
   rm -rf "${build_dir}"
 }

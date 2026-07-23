@@ -39,7 +39,7 @@ install_mysql() {
 
   download_src "${url}" "${url##*/}" "${mysql_sha256:-}"
   archive="${LNMP_SRC_DIR}/${url##*/}"
-  build_dir="$(mktemp -d)"
+  build_dir="$(make_build_dir)"
   extract_archive "${archive}" "${build_dir}"
   extracted="$(find "${build_dir}" -mindepth 1 -maxdepth 1 -type d | head -1)"
 
@@ -70,8 +70,11 @@ EOF
   write_mysql_service
   link_mysql_cli_commands
   systemctl_reload_or_restart mysqld
-  sleep 3
-  "${mysql_install_dir}/bin/mysql" -uroot -S "${mysql_sock}" -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${mysql_password}'; FLUSH PRIVILEGES;"
+  wait_for_database_ready "${mysql_install_dir}/bin/mysql" "${mysql_sock}" \
+    || die "MySQL did not become ready on ${mysql_sock}; inspect ${mysql_log_dir}/error.log"
+  printf "ALTER USER 'root'@'localhost' IDENTIFIED BY %s; FLUSH PRIVILEGES;\n" "$(sql_quote_literal "${mysql_password}")" \
+    | "${mysql_install_dir}/bin/mysql" -uroot -S "${mysql_sock}" \
+    || die "Failed to set the MySQL root password; once MySQL is running set it with: ./reset-password.sh mysql"
   write_component_version_marker "${mysql_install_dir}" "${mysql_ver}"
   rm -rf "${build_dir}"
 }

@@ -29,7 +29,7 @@ install_php_version() {
 
   download_src "${url}" "${url##*/}" "$(php_source_sha256 "${short}" 2>/dev/null || true)"
   archive="${LNMP_SRC_DIR}/${url##*/}"
-  build_dir="$(mktemp -d)"
+  build_dir="$(make_build_dir)"
   extract_archive "${archive}" "${build_dir}"
 
   pushd "${build_dir}/php-${full}" >/dev/null
@@ -49,7 +49,7 @@ install_php_version() {
   done < <(php_configure_flags_for_extensions "${short}" "${php_extensions}")
 
   ./configure "${configure_flags[@]}"
-  make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  make -j"$(build_parallelism)"
   make install
   [[ -x "${prefix}/bin/phpize" ]] || die "phpize was not found after installing PHP ${short}"
   [[ -x "${prefix}/bin/php-config" ]] || die "php-config was not found after installing PHP ${short}"

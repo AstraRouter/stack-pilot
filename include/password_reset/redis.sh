@@ -32,7 +32,10 @@ reset_redis_password() {
   local conf="${redis_install_dir}/etc/redis.conf"
   [[ -f "${conf}" ]] || die "Redis configuration does not exist: ${conf}"
   reset_redis_config_password "${conf}" "${password}"
+  chown root:redis "${conf}" 2>/dev/null || true
+  chmod 640 "${conf}"
   redis_password="${password}"
+  write_redis_auth_env "${password}"
   write_redis_service
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl restart redis-server >/dev/null 2>&1 || {

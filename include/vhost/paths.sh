@@ -33,3 +33,14 @@ server_names() {
     printf '%s' "${domain}"
   fi
 }
+
+# True only when path is a strict sub-directory of wwwroot_dir (so `rm -rf` during
+# vhost deletion can never escape the web root even if the conf was hand-edited).
+vhost_docroot_removable() {
+  local path="${1%/}" root="${wwwroot_dir%/}"
+  [[ -n "${path}" && "${path}" == /* ]] || return 1
+  [[ "${path}" != *'/../'* && "${path}" != */.. ]] || return 1
+  [[ -n "${root}" ]] || return 1
+  [[ "${path}" == "${root}/"* ]] || return 1
+  (( ${#path} > ${#root} + 1 ))
+}

@@ -23,6 +23,31 @@ reload_nginx() {
   fi
 }
 
+# Install a freshly rendered vhost config atomically: validate the whole Nginx
+# configuration with `nginx -t`, then roll back to the previous file (or remove a
+# new one) if validation fails, so a bad render can never take down every site.
+install_vhost_config() {
+  local conf="$1" candidate="$2"
+  local backup="" nginx_bin="${nginx_install_dir:-}/sbin/nginx"
+  if [[ -f "${conf}" ]]; then
+    backup="${conf}.stackpilot-bak.$$"
+    cp -a "${conf}" "${backup}"
+  fi
+  mv -- "${candidate}" "${conf}"
+  if [[ -x "${nginx_bin}" ]] && ! "${nginx_bin}" -t >/dev/null 2>&1; then
+    if [[ -n "${backup}" ]]; then
+      mv -- "${backup}" "${conf}"
+    else
+      rm -f -- "${conf}"
+    fi
+    warn "Nginx rejected the generated configuration; the previous state was restored. Details:"
+    "${nginx_bin}" -t 2>&1 | tail -20 >&2 || true
+    die "Aborting: the generated site configuration ${conf##*/} is invalid"
+  fi
+  [[ -n "${backup}" ]] && rm -f -- "${backup}"
+  return 0
+}
+
 switch_vhost_php_version() {
   local domain="$1"
   local php_version="$2"

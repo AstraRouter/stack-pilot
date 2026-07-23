@@ -34,6 +34,23 @@ set_config_value() {
   mv "${tmp}" "${file}"
 }
 
+# Refuse to `source` a config file that an unprivileged user could have tampered
+# with while we run as root (that would be arbitrary code execution as root).
+assert_config_file_trusted() {
+  local file="$1" mode owner
+  [[ -e "${file}" ]] || return 0
+  # Only enforce under root; a normal user sourcing their own config is their own risk.
+  [[ "$(id -u)" == "0" ]] || return 0
+  mode="$(stat -c '%a' "${file}" 2>/dev/null || stat -f '%Lp' "${file}" 2>/dev/null || echo '')"
+  if [[ -n "${mode}" ]] && (( 8#${mode} & 0022 )); then
+    die "Refusing to load ${file}: it is group/world-writable while running as root (run: chmod go-w '${file}')"
+  fi
+  owner="$(stat -c '%u' "${file}" 2>/dev/null || stat -f '%u' "${file}" 2>/dev/null || echo '')"
+  if [[ -n "${owner}" && "${owner}" != "0" && "${owner}" != "${SUDO_UID:-x}" ]]; then
+    die "Refusing to load ${file}: owned by uid ${owner}, not root or the sudo invoker, while running as root"
+  fi
+}
+
 load_options() {
   local options_file="${1:-${LNMP_ROOT_DIR}/options.conf}"
   local example_file="${LNMP_OPTIONS_EXAMPLE_FILE:-${LNMP_ROOT_DIR}/options.example.conf}"
@@ -44,6 +61,7 @@ load_options() {
     info "Created private runtime configuration: ${options_file}"
   fi
   LNMP_OPTIONS_FILE="${options_file}"
+  assert_config_file_trusted "${options_file}"
   # shellcheck disable=SC1090
   source "${options_file}"
   if declare -F refresh_component_version_urls >/dev/null; then
@@ -58,6 +76,7 @@ load_options() {
 load_versions() {
   local versions_file="${1:-${LNMP_ROOT_DIR}/versions.conf}"
   [[ -f "${versions_file}" ]] || die "Version file not found: ${versions_file}"
+  assert_config_file_trusted "${versions_file}"
   # shellcheck disable=SC1090
   source "${versions_file}"
 }

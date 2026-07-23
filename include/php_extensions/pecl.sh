@@ -4,12 +4,17 @@ install_php_pecl_extensions() {
   local short="$1"
   local extensions="$2"
   local prefix ext pecl_bin
+  local failed=()
   prefix="$(php_install_dir_for_version "${short}")"
   pecl_bin="${prefix}/bin/pecl"
   [[ -x "${pecl_bin}" ]] || { warn "PHP ${short}: pecl was not found at ${pecl_bin}"; return 0; }
   for ext in ${extensions}; do
-    install_php_pecl_extension "${short}" "${ext}"
+    install_php_pecl_extension "${short}" "${ext}" || failed+=("${ext}")
   done
+  if ((${#failed[@]} > 0)); then
+    warn "PHP ${short}: these PECL extensions were skipped after errors and can be retried with ./addons.sh: ${failed[*]}"
+  fi
+  return 0
 }
 
 install_php_pecl_extension() {

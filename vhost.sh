@@ -76,11 +76,19 @@ default_site_root() {
 }
 
 site_root_prompt() {
-  local template="$1" default="$2"
+  local template="$1" default="$2" value message
   case "${template}" in
-    laravel|thinkphp) prompt_input "Enter the web root (it must directly contain public/index.php)" "${default}" ;;
-    *) prompt_input "Enter the web root" "${default}" ;;
+    laravel|thinkphp) message="Enter the web root (it must directly contain public/index.php)" ;;
+    *) message="Enter the web root" ;;
   esac
+  while :; do
+    value="$(prompt_input "${message}" "${default}")"
+    if validate_path "${value}"; then
+      printf '%s' "${value}"
+      return 0
+    fi
+    warn "Invalid path: use an absolute path with only letters, digits, dot, dash, underscore, and slash (no spaces or metacharacters)"
+  done
 }
 
 site_php_default() {
@@ -117,11 +125,24 @@ add_vhost() {
 delete_vhost() {
   local domain remove_root root_dir
   domain="$(prompt_domain)"
-  root_dir="$(awk '/^[[:space:]]*root[[:space:]]+/ { gsub(/;/, "", $2); print $2; exit }' "$(vhost_conf_file "${domain}")" 2>/dev/null || true)"
+  root_dir="$(awk '
+    /^[[:space:]]*root[[:space:]]+/ {
+      line=$0
+      sub(/^[[:space:]]*root[[:space:]]+/, "", line)
+      sub(/[[:space:]]*;[[:space:]]*$/, "", line)
+      print line
+      exit
+    }' "$(vhost_conf_file "${domain}")" 2>/dev/null || true)"
   delete_vhost_config "${domain}"
   if [[ -n "${root_dir}" && -d "${root_dir}" ]]; then
     remove_root="$(prompt_yes_no "Delete the website directory ${root_dir}" "n")"
-    [[ "${remove_root}" == "y" ]] && rm -rf "${root_dir}"
+    if [[ "${remove_root}" == "y" ]]; then
+      if vhost_docroot_removable "${root_dir}"; then
+        rm -rf -- "${root_dir}"
+      else
+        warn "Refusing to remove ${root_dir}: it is not a sub-directory of ${wwwroot_dir}. Remove it manually if you are sure."
+      fi
+    fi
   fi
   reload_nginx
   ok "Site deleted: ${domain}"
