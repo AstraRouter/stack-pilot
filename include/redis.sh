@@ -58,7 +58,7 @@ cleanup_partial_redis_install() {
 install_redis_server() {
   if redis_install_complete; then
     local detected
-    detected="$(${redis_install_dir}/bin/redis-server --version 2>/dev/null | extract_semver || true)"
+    detected="$("${redis_install_dir}/bin/redis-server" --version 2>/dev/null | extract_semver || true)"
     if should_skip_completed_install Redis "${redis_install_dir}" "${redis_ver}" "${detected}"; then
       warn "Redis is already installed: ${redis_install_dir}"
       return 0
@@ -75,10 +75,10 @@ install_redis_server() {
   build_dir="$(make_build_dir)"
   extract_archive "${archive}" "${build_dir}"
 
-  pushd "${build_dir}/redis-${redis_ver}" >/dev/null
+  pushd "${build_dir}/redis-${redis_ver}" >/dev/null || die "Could not enter the build directory"
   make -j"$(build_parallelism)"
   make PREFIX="${redis_install_dir}" install
-  popd >/dev/null
+  popd >/dev/null || die "Could not leave the build directory"
   rm -rf "${build_dir}"
 
   ensure_user_group redis redis
@@ -86,13 +86,19 @@ install_redis_server() {
   mkdir -p "${redis_data_dir}" "${redis_install_dir}/etc" "${redis_log_dir}" "${pid_dir}"
   chown -R redis:redis "${redis_data_dir}" "${redis_log_dir}"
 
+  # redis_bind is interpolated into redis.conf, which options.conf can set
+  # without going through the wizard's validation.
+  validate_bind_address "${redis_bind}" || die "Invalid Redis bind address: ${redis_bind}"
+  validate_redis_password "${redis_pass}" ||
+    die "Invalid Redis password: use 6-512 characters from A-Z a-z 0-9 . _ ~ ! @ % ^ * + = : , / - (no spaces, quotes, or #)"
+  validate_port "${redis_port}" || die "Invalid Redis port: ${redis_port}"
+
   cat > "${redis_install_dir}/etc/redis.conf" <<EOF
 bind ${redis_bind}
 protected-mode yes
 port ${redis_port}
 daemonize no
 supervised no
-pidfile ${pid_dir}/redis.pid
 dir ${redis_data_dir}
 logfile ${redis_log_dir}/redis.log
 appendonly ${redis_appendonly}

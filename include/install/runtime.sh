@@ -48,9 +48,29 @@ prepare_selected_component_layout() {
   fi
 }
 
+# Exporting TZ only affects this process. Cron jobs, service log timestamps, and
+# database sessions all follow the system zone, so it is set too when the host
+# provides timedatectl and knows the zone.
+apply_system_timezone() {
+  local zone="${timezone:-}"
+  [[ -n "${zone}" ]] || return 0
+  validate_timezone "${zone}" || die "Invalid timezone: ${zone}"
+  export TZ="${zone}"
+  [[ "${LNMP_SET_SYSTEM_TIMEZONE:-y}" == "y" ]] || return 0
+  command_exists timedatectl || return 0
+  if [[ ! -e "/usr/share/zoneinfo/${zone}" ]]; then
+    warn "Time zone ${zone} is not in this system's zoneinfo database; the system clock zone was left unchanged"
+    return 0
+  fi
+  timedatectl set-timezone "${zone}" >/dev/null 2>&1 ||
+    warn "Could not set the system time zone; set it manually with: timedatectl set-timezone ${zone}"
+}
+
 run_install() {
   require_root
-  export TZ="${timezone}"
+  validate_unix_username "${user}" || die "Invalid service user: ${user}"
+  validate_unix_username "${group}" || die "Invalid service group: ${group}"
+  apply_system_timezone
   ensure_user_group "${user}" "${group}"
   prepare_selected_component_layout
   preflight_system_dependencies
@@ -83,10 +103,75 @@ run_install() {
   if has_component certbot; then
     run_step_once certbot install_certbot || warn "Certbot could not be installed automatically; retry from vhost.sh or install it manually"
   fi
+  if has_component fail2ban; then
+    run_step_once fail2ban install_fail2ban || warn "fail2ban was not configured; install it manually to enable brute-force protection"
+  fi
   apply_php_security || true
+  configure_logrotate || true
   configure_firewall || true
   save_runtime_options
   save_install_summary
+}
+
+# Rough free space needed under LNMP_SRC_DIR, in MB. Archives, extracted trees,
+# and object files all land there, and each PHP version is built separately.
+estimated_required_space_mb() {
+  local total=512 version php_count=0
+  if has_component php; then
+    for version in ${php_versions:-}; do
+      php_count=$((php_count + 1))
+    done
+    ((php_count > 0)) || php_count=1
+    total=$((total + php_count * 2048))
+  fi
+  case "${db_engine:-none}" in mysql|mariadb) total=$((total + 4096)) ;; esac
+  has_component nginx && total=$((total + 256))
+  has_component redis && total=$((total + 256))
+  printf '%s' "${total}"
+}
+
+# Free space on the filesystem that will hold a path, resolving to the nearest
+# existing ancestor because the directory itself may not be created yet.
+available_space_mb() {
+  local path="${1:-/}"
+  while [[ ! -d "${path}" && "${path}" != "/" && -n "${path}" ]]; do
+    path="$(dirname "${path}")"
+  done
+  df -Pm "${path}" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+preflight_disk_space() {
+  local required available
+  required="$(estimated_required_space_mb)"
+  available="$(available_space_mb "${LNMP_SRC_DIR}")"
+  if [[ ! "${available}" =~ ^[0-9]+$ ]]; then
+    warn "Could not determine free space for ${LNMP_SRC_DIR}; skipping the disk-space check"
+    return 0
+  fi
+  printf '  Build space in %s: %s MB available, about %s MB required\n' \
+    "${LNMP_SRC_DIR}" "${available}" "${required}"
+  if ((available < required)); then
+    warn "Only ${available} MB is free for builds under ${LNMP_SRC_DIR}, but roughly ${required} MB is needed."
+    warn "Free up space or point LNMP_SRC_DIR at a larger filesystem."
+    [[ "${LNMP_ALLOW_LOW_DISK:-0}" == "1" ]] ||
+      die "Insufficient build space; set LNMP_ALLOW_LOW_DISK=1 to continue anyway"
+  fi
+}
+
+# The database components ship as official binary tarballs that exist only for
+# some architectures. Failing here names the architecture instead of letting an
+# empty URL surface as an unrelated download error mid-installation.
+preflight_architecture() {
+  case "${db_engine:-none}" in
+    mysql)
+      mysql_binary_url >/dev/null 2>&1 ||
+        die "MySQL has no official binary package for $(uname -m); choose MariaDB or a different architecture"
+      ;;
+    mariadb)
+      mariadb_binary_url >/dev/null 2>&1 ||
+        die "MariaDB has no official binary package for $(uname -m); choose MySQL or a different architecture"
+      ;;
+  esac
 }
 
 run_preflight() {
@@ -95,7 +180,9 @@ run_preflight() {
   echo "Pre-installation checks:"
   command_exists curl || warn "curl was not found; dependency installation will attempt to install it"
   command_exists tar || warn "tar was not found; dependency installation will attempt to install it"
+  preflight_architecture
   df -h / | awk 'NR==2 {print "  Disk available: "$4}'
+  preflight_disk_space
   if command_exists free; then
     free -h | awk '/Mem:/ {print "  Memory: "$2", available: "$7}'
     free -m | awk '/Swap:/ { if ($2 == 0) print "  Swap: not configured; consider adding swap on low-memory systems" }'
@@ -137,10 +224,17 @@ check_php_compatibility() {
 
 save_install_summary() {
   local summary="${ROOT_DIR}/install.txt"
+  local pecl_failures
+  pecl_failures="$(php_pecl_failure_summary 2>/dev/null || true)"
   {
     echo "LNMP install summary"
     date
     print_summary
+    if [[ -n "${pecl_failures}" ]]; then
+      echo
+      echo "PECL extensions that failed to build (retry with ./addons.sh):"
+      echo "  ${pecl_failures}"
+    fi
     echo
     echo "Passwords:"
     [[ "${db_engine}" == "mysql" ]] && echo "  MySQL: ${mysql_password}"
@@ -150,6 +244,14 @@ save_install_summary() {
     fi
   } > "${summary}"
   chmod 600 "${summary}"
+}
+
+report_pecl_failures() {
+  local failures
+  failures="$(php_pecl_failure_summary 2>/dev/null || true)"
+  [[ -n "${failures}" ]] || return 0
+  warn "These PECL extensions did not build and are NOT installed: ${failures}"
+  warn "Retry them individually with ./addons.sh; the list is also recorded in install.txt."
 }
 
 print_passwords_to_tty() {

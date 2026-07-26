@@ -1,0 +1,20 @@
+# ShellCheck configuration for Stack Pilot.
+#
+# The three checks below cannot see this codebase's structure and fire on
+# hundreds of correct lines, which drowns out real findings and makes the lint
+# run useless as a pass/fail gate. Everything else stays enabled.
+
+# SC2154 "referenced but not assigned": settings such as wwwroot_dir, db_engine,
+# and php_versions are defined in options.conf and loaded with load_options at
+# runtime, so no static definition exists in the scripts that read them.
+disable=SC2154
+
+# SC2034 "appears unused": OS_ID, PM, ARCH, and the LNMP_* coordination flags are
+# assigned in one module and consumed in another. ShellCheck checks one file at
+# a time and cannot follow the runtime source order.
+disable=SC2034
+
+# SC2329 "function is never invoked": the test suite overrides functions such as
+# command_exists, warn, and sshd inside subshells to stub out system calls. They
+# are invoked by the code under test, not by the test file itself.
+disable=SC2329

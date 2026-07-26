@@ -31,6 +31,10 @@ reset_redis_password() {
   local password="${1:-}"
   local conf="${redis_install_dir}/etc/redis.conf"
   [[ -f "${conf}" ]] || die "Redis configuration does not exist: ${conf}"
+  # Without this an unquoted space, '#', or newline silently corrupts
+  # redis.conf and the server fails to start on the next restart.
+  validate_redis_password "${password}" ||
+    die "Invalid Redis password: use 6-512 characters from A-Z a-z 0-9 . _ ~ ! @ % ^ * + = : , / - (no spaces, quotes, or #)"
   reset_redis_config_password "${conf}" "${password}"
   chown root:redis "${conf}" 2>/dev/null || true
   chmod 640 "${conf}"

@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# Removal needs to know where the log-rotation and fail2ban files were written,
+# so those modules are pulled in here rather than left to each caller.
+# shellcheck source=/dev/null
+source "${LNMP_ROOT_DIR}/include/logrotate.sh"
+# shellcheck source=/dev/null
+source "${LNMP_ROOT_DIR}/include/fail2ban.sh"
+
 uninstall_unit_dir() {
   printf '%s' "${LNMP_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 }
@@ -53,6 +60,9 @@ safe_remove_managed_file() {
 
 remove_managed_symlink() {
   local link="$1" expected_prefix="${2%/}" target
+  # An empty prefix would turn the "${expected_prefix}/"* pattern below into
+  # /* and match every absolute symlink target.
+  [[ -n "${expected_prefix}" ]] || return 0
   [[ -L "${link}" ]] || return 0
   target="$(readlink "${link}" 2>/dev/null || true)"
   case "${target}" in
@@ -113,7 +123,7 @@ uninstall_nginx() {
   remove_component_runtime_file "${nginx_pid}"
   if [[ "${UNINSTALL_REMOVE_WWW:-n}" == "y" ]]; then safe_remove_managed_path "${wwwroot_dir}"; fi
   remove_source_cache_url "${nginx_url:-}"
-  clear_component_state_markers nginx_
+  clear_component_state_markers "$(safe_state_name "nginx:")"
 }
 
 uninstall_php_versions() {
@@ -126,7 +136,7 @@ uninstall_php_versions() {
     done
     safe_remove_managed_path "${dir}"
     remove_source_cache_url "$(php_source_url "${version}" 2>/dev/null || true)"
-    clear_component_state_markers "php_${version}"
+    clear_component_state_markers "$(safe_state_name "php:${version}")"
   done
 
   remaining="$(installed_php_versions 2>/dev/null || true)"
@@ -153,8 +163,10 @@ remove_my_cnf_if_unused() {
   [[ -e /etc/my.cnf ]] || return 0
   [[ -d "${mysql_install_dir}" || -d "${mariadb_install_dir}" ]] && return 0
   [[ "${LNMP_UNINSTALL_SKIP_SYSTEM_CONFIG:-0}" == "1" ]] && return 0
-  if grep -Fq "basedir=${mysql_install_dir}" /etc/my.cnf 2>/dev/null || \
-     grep -Fq "basedir=${mariadb_install_dir}" /etc/my.cnf 2>/dev/null; then
+  # An empty install dir would degrade the pattern to the substring "basedir="
+  # and match a my.cnf belonging to an unrelated database installation.
+  if { [[ -n "${mysql_install_dir:-}" ]] && grep -Fq "basedir=${mysql_install_dir}" /etc/my.cnf 2>/dev/null; } || \
+     { [[ -n "${mariadb_install_dir:-}" ]] && grep -Fq "basedir=${mariadb_install_dir}" /etc/my.cnf 2>/dev/null; }; then
     rm -f -- /etc/my.cnf
   else
     warn "/etc/my.cnf was not generated for the current Stack Pilot paths and was preserved"
@@ -213,9 +225,14 @@ remove_certbot_renew_job() {
   stop_disable_remove_service lnmp-certbot-renew.timer
   stop_disable_remove_service lnmp-certbot-renew
   if [[ "${LNMP_UNINSTALL_SKIP_SERVICE_ACTIONS:-0}" != "1" ]] && command_exists crontab; then
-    local current
-    current="$(crontab -l 2>/dev/null | grep -v 'certbot renew' || true)"
-    printf '%s\n' "${current}" | crontab - 2>/dev/null || true
+    local existing current
+    existing="$(crontab -l 2>/dev/null || true)"
+    # Only touch the crontab when one exists, so uninstalling never creates an
+    # empty crontab for an account that had none.
+    if [[ -n "${existing}" ]]; then
+      current="$(printf '%s\n' "${existing}" | grep -v "${LNMP_CERTBOT_CRON_MARKER:-# stack-pilot-certbot-renew}" || true)"
+      printf '%s\n' "${current}" | crontab - 2>/dev/null || true
+    fi
   fi
 }
 
@@ -230,6 +247,7 @@ uninstall_certbot() {
       case "${PM}" in
         apt-get) wait_for_apt_locks; run_apt_get remove -y certbot ;;
         dnf|yum) "${PM}" remove -y certbot ;;
+        zypper) run_zypper remove certbot ;;
       esac
     fi
   fi
@@ -244,8 +262,38 @@ uninstall_certbot() {
 uninstall_composer() {
   remove_managed_symlink "${LNMP_CLI_BIN_DIR:-/usr/local/bin}/composer" "${composer_install_dir}"
   safe_remove_managed_path "${composer_install_dir}"
+  # The installer is no longer cached, but a copy left by an earlier release
+  # would keep failing its signature check, so it is cleaned up here.
   remove_source_cache_url "https://getcomposer.org/installer" composer-setup.php
   clear_component_state_markers composer
+}
+
+# Only the jail file this installer wrote is removed. fail2ban itself and any
+# jails the administrator added stay, because they may be protecting services
+# that have nothing to do with this stack.
+uninstall_fail2ban() {
+  local jail
+  jail="$(fail2ban_jail_path)"
+  [[ -f "${jail}" ]] && rm -f -- "${jail}"
+  if [[ "${LNMP_UNINSTALL_SKIP_SERVICE_ACTIONS:-0}" != "1" ]] && command_exists systemctl; then
+    systemctl reload fail2ban >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
+  fi
+  clear_component_state_markers fail2ban
+  return 0
+}
+
+# Rotation covers several components at once, so it is removed when the last of
+# them goes rather than alongside any single one.
+remove_logrotate_config_if_unused() {
+  local config
+  config="$(logrotate_config_path)"
+  [[ -f "${config}" ]] || return 0
+  [[ -d "${nginx_install_dir:-}" ]] && return 0
+  [[ -d "${php_install_base:-}" ]] && return 0
+  [[ -d "${mysql_install_dir:-}" || -d "${mariadb_install_dir:-}" ]] && return 0
+  [[ -d "${redis_install_dir:-}" || -d "${memcached_install_dir:-}" ]] && return 0
+  rm -f -- "${config}"
+  return 0
 }
 
 uninstall_component() {
@@ -259,15 +307,18 @@ uninstall_component() {
     memcached) uninstall_memcached ;;
     certbot) uninstall_certbot ;;
     composer) uninstall_composer ;;
+    fail2ban) uninstall_fail2ban ;;
     *) die "Unknown component to uninstall: ${component}" ;;
   esac
+  remove_logrotate_config_if_unused
 }
 
 uninstall_component_label() {
   case "$1" in
     nginx) printf 'Nginx' ;; php) printf 'PHP' ;; mysql) printf 'MySQL' ;;
     mariadb) printf 'MariaDB' ;; redis) printf 'Redis' ;; memcached) printf 'Memcached' ;;
-    certbot) printf 'Certbot' ;; composer) printf 'Composer' ;; *) printf '%s' "$1" ;;
+    certbot) printf 'Certbot' ;; composer) printf 'Composer' ;; fail2ban) printf 'fail2ban' ;;
+    *) printf '%s' "$1" ;;
   esac
 }
 
@@ -340,6 +391,9 @@ report_uninstall_residuals() {
       composer)
         uninstall_report_path_if_present "program directory" "${composer_install_dir}"
         uninstall_report_managed_link_if_present "${LNMP_CLI_BIN_DIR:-/usr/local/bin}/composer" "${composer_install_dir}"
+        ;;
+      fail2ban)
+        uninstall_report_path_if_present "jail configuration" "$(fail2ban_jail_path)"
         ;;
     esac
   done

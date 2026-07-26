@@ -40,6 +40,12 @@ option_keys=(
   php_profile php_extensions php_pecl_extensions
   customize_service_ports manage_firewall open_database_port open_redis_port open_memcached_port
   php_security_hardening php_disable_functions
+  nginx_worker_connections nginx_keepalive_timeout nginx_client_max_body_size
+  nginx_security_headers nginx_hsts_max_age nginx_http3
+  nginx_rate_limit nginx_rate_limit_rps nginx_rate_limit_burst nginx_conn_limit
+  backup_keep_days upgrade_keep_failed
+  manage_logrotate logrotate_interval logrotate_keep
+  fail2ban_bantime fail2ban_findtime fail2ban_maxretry
 )
 
 for key in "${option_keys[@]}"; do
@@ -59,5 +65,28 @@ assert_eq "redis memcached" "$(get_config_value "${ROOT_DIR}/options.conf" php_p
 assert_eq "nginx php mysql" "$(get_config_value "${ROOT_DIR}/options.conf" install_components)" "space-separated components should round-trip"
 assert_eq "php_disable_functions-value" "$(get_config_value "${ROOT_DIR}/options.conf" php_disable_functions)" "last option should be written"
 assert_eq "nginx_ver-value" "$(get_config_value "${ROOT_DIR}/options.conf" nginx_ver)" "selected Nginx version should be written"
+assert_eq "logrotate_keep-value" "$(get_config_value "${ROOT_DIR}/options.conf" logrotate_keep)" "log rotation options should round-trip"
+assert_eq "nginx_client_max_body_size-value" \
+  "$(get_config_value "${ROOT_DIR}/options.conf" nginx_client_max_body_size)" \
+  "the request size limit should round-trip"
+
+# An options.conf written by an older release does not define keys added since.
+# Aborting on the unbound variable would lose the run at its very last step,
+# after everything had already been installed.
+missing_key_root="$(mktemp -d)"
+(
+  ROOT_DIR="${missing_key_root}"
+  printf 'timezone=old\n' > "${ROOT_DIR}/options.conf"
+  for key in "${option_keys[@]}"; do
+    unset "${key}"
+  done
+  timezone="kept"
+  save_runtime_options
+) || fail "save_runtime_options must tolerate options that the file does not define"
+assert_eq "kept" "$(get_config_value "${missing_key_root}/options.conf" timezone)" \
+  "a defined option should still be written when others are missing"
+assert_eq "" "$(get_config_value "${missing_key_root}/options.conf" logrotate_keep)" \
+  "an undefined option should be written empty so its default applies at the point of use"
+rm -rf "${missing_key_root}"
 
 echo "PASS: install options"

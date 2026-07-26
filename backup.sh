@@ -30,27 +30,43 @@ run_backup_step() {
   fi
 }
 
+choose_site_to_back_up() {
+  local site entries=()
+  while IFS= read -r site; do
+    [[ -n "${site}" ]] && entries+=("${site}|${site}")
+  done < <(list_backup_sites)
+  ((${#entries[@]} > 0)) || { warn "No site directories were found under ${wwwroot_dir}"; return 1; }
+  prompt_select "Select a site" "$(entry_value "${entries[0]}")" "${entries[@]}"
+}
+
+backup_single_site() {
+  local site
+  site="$(choose_site_to_back_up)" || return 1
+  run_backup_step "Site ${site}" backup_site "${site}"
+}
+
 while :; do
   print_header
   choice="$(prompt_select "Select backup content" "1" \
-    "1|Website directory" \
-    "2|All MySQL/MariaDB databases" \
-    "3|Redis data directory" \
-    "4|Everything" \
-    "5|Remove expired backups" \
-    "6|Exit")"
+    "1|Website directory (all sites)" \
+    "2|One site" \
+    "3|All MySQL/MariaDB databases" \
+    "4|Redis data directory" \
+    "5|Everything" \
+    "6|Remove expired backups" \
+    "7|Exit")"
   case "${choice}" in
     1) run_backup_step "Website" backup_web ;;
-    2) run_backup_step "Database" backup_mysql ;;
-    3) run_backup_step "Redis" backup_redis ;;
-    4)
+    2) run_menu_action "Backing up the site" backup_single_site ;;
+    3) run_backup_step "Database" backup_mysql ;;
+    4) run_backup_step "Redis" backup_redis ;;
+    5)
       run_backup_step "Website" backup_web
       run_backup_step "Database" backup_mysql
       run_backup_step "Redis" backup_redis
       ;;
-    5) cleanup_backups || warn "Expired-backup cleanup did not complete" ;;
-    6) exit 0 ;;
+    6) cleanup_backups || warn "Expired-backup cleanup did not complete" ;;
+    7) exit 0 ;;
   esac
-  echo
-  read -r -p "Press Enter to return to the menu..." _ || true
+  pause_for_menu
 done

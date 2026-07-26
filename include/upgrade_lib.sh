@@ -10,13 +10,16 @@ validate_upgrade_install_dir() {
 }
 
 backup_before_upgrade() {
-  local backup="${backup_dir}/upgrade-config-$(date '+%Y%m%d-%H%M%S').tar.gz"
+  local backup
+  backup="${backup_dir}/upgrade-config-$(date '+%Y%m%d-%H%M%S').tar.gz"
   local paths=("${LNMP_OPTIONS_FILE:-${ROOT_DIR}/options.conf}" "${ROOT_DIR}/versions.conf") path
-  mkdir -p "${backup_dir}"
+  ensure_private_dir "${backup_dir}"
   for path in "${ROOT_DIR}/install.txt" "$@"; do
     [[ -e "${path}" ]] && paths+=("${path}")
   done
   LC_ALL=C tar czf "${backup}" "${paths[@]}"
+  # options.conf and install.txt are inside this archive in plaintext.
+  protect_private_file "${backup}"
   [[ -s "${backup}" ]] || die "The pre-upgrade configuration backup failed"
   ok "Pre-upgrade configuration backup: ${backup}"
 }
@@ -26,12 +29,14 @@ create_component_snapshot() {
   local parent base snapshot safe_label
   validate_upgrade_install_dir "${install_dir}" || die "Refusing to snapshot an unsafe upgrade path: ${install_dir}"
   [[ -d "${install_dir}" ]] || die "${label} is not installed and cannot be upgraded: ${install_dir}"
-  mkdir -p "${backup_dir}"
+  ensure_private_dir "${backup_dir}"
   parent="$(dirname "${install_dir}")"
   base="$(basename "${install_dir}")"
   safe_label="$(printf '%s' "${label}" | tr '[:upper:] /:' '[:lower:]___')"
   snapshot="${backup_dir}/${safe_label}-tree-$(date '+%Y%m%d-%H%M%S')-$$-${RANDOM}.tar.gz"
   LC_ALL=C tar czf "${snapshot}" -C "${parent}" "${base}"
+  # A Redis snapshot carries redis.conf, which contains requirepass in plaintext.
+  protect_private_file "${snapshot}"
   [[ -s "${snapshot}" ]] || die "Failed to snapshot the ${label} installation directory"
   printf '%s' "${snapshot}"
 }
@@ -44,6 +49,35 @@ control_upgrade_service() {
   else
     service "${service_name}" "${action}"
   fi
+}
+
+# Every failed upgrade leaves a complete copy of the previous installation
+# behind as <dir>.failed-<timestamp>. Nothing ever removed them, so a component
+# that keeps failing to build fills the disk with identical trees -- and a full
+# disk is often why the build failed in the first place. The newest copies are
+# kept for post-mortem; the rest go.
+prune_failed_upgrade_dirs() {
+  local install_dir="$1"
+  local keep="${upgrade_keep_failed:-1}"
+  local entries=() entry index total
+  validate_upgrade_install_dir "${install_dir}" || return 0
+  if [[ "${keep}" =~ ^0*([0-9]{1,3})$ ]]; then
+    keep="$((10#${BASH_REMATCH[1]}))"
+  else
+    warn "Invalid upgrade_keep_failed: ${keep}; keeping one failed-upgrade directory"
+    keep=1
+  fi
+  # The name embeds a zero-padded timestamp, so a lexical sort is chronological
+  # and the newest entries are last.
+  while IFS= read -r entry; do
+    [[ -d "${entry}" ]] && entries+=("${entry}")
+  done < <(printf '%s\n' "${install_dir}".failed-* | sort)
+  total=${#entries[@]}
+  ((total > keep)) || return 0
+  for ((index = 0; index < total - keep; index++)); do
+    rm -rf -- "${entries[index]}"
+    info "Removed a superseded failed-upgrade directory: ${entries[index]}"
+  done
 }
 
 rollback_component_tree() {
@@ -64,6 +98,7 @@ rollback_component_tree() {
     return 1
   }
   warn "The ${label} upgrade failed and the previous version was restored; the failed directory remains at ${failed_dir}"
+  prune_failed_upgrade_dirs "${install_dir}"
 }
 
 restore_snapshot_paths() {
@@ -108,7 +143,11 @@ preserve_no_upgrade_config() { return 0; }
 transactional_component_upgrade() {
   local label="$1" step="$2" install_dir="$3" service_name="$4" health_fn="$5" preserve_fn="$6" installer="$7"
   shift 7
-  local snapshot was_done=n installer_status=0 had_errexit=n
+  local snapshot was_done=n installer_status=0 had_errexit=n installed_version selected_version
+  # The step name carries the target version as "component:version".
+  selected_version="${step#*:}"
+  installed_version="$(read_component_version_marker "${install_dir}" 2>/dev/null || true)"
+  assert_not_a_downgrade "${label}" "${installed_version}" "${selected_version}"
   snapshot="$(create_component_snapshot "${label}" "${install_dir}")"
   is_step_done "${step}" && was_done=y
   clear_step_done "${step}"
@@ -124,6 +163,7 @@ transactional_component_upgrade() {
        control_upgrade_service restart "${service_name}" && \
        "${health_fn}"; then
       mark_step_done "${step}"
+      prune_failed_upgrade_dirs "${install_dir}"
       ok "The ${label} upgrade and health check passed; rollback snapshot: ${snapshot}"
       return 0
     fi

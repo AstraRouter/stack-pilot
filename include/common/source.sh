@@ -39,7 +39,7 @@ download_src() {
     curl -fL --proto-redir '=https' --retry 3 \
       --connect-timeout 15 --speed-limit 1024 --speed-time 30 -o "${tmp}" "${url}"
   elif command_exists wget; then
-    wget --timeout=30 --tries=3 --retry-connrefused -O "${tmp}" "${url}"
+    wget --https-only --timeout=30 --tries=3 --retry-connrefused -O "${tmp}" "${url}"
   else
     die "curl or wget is required to download source archives"
   fi
@@ -51,6 +51,26 @@ download_src() {
   fi
   mv "${tmp}" "${target}"
   return 0
+}
+
+# Fetch to an exact destination without consulting or populating the source
+# cache. Content that is verified against a signature published separately, such
+# as the Composer installer, must never be cached: the cached copy would keep
+# being checked against a freshly fetched signature for a newer release, so once
+# upstream updates, every run fails with a checksum mismatch that clearing the
+# cache is the only way to resolve.
+download_uncached() {
+  local url="$1" target="$2"
+  info "Downloading ${url}"
+  if command_exists curl; then
+    curl -fL --proto '=https' --proto-redir '=https' --retry 3 \
+      --connect-timeout 15 --speed-limit 1024 --speed-time 30 -o "${target}" "${url}"
+  elif command_exists wget; then
+    wget --https-only --timeout=30 --tries=3 --retry-connrefused -O "${target}" "${url}"
+  else
+    die "curl or wget is required to download ${url}"
+  fi
+  [[ -s "${target}" ]] || die "Downloaded an empty file from ${url}"
 }
 
 verify_sha256() {

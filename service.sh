@@ -35,7 +35,7 @@ choose_php_version_for_cli() {
   default="${available%% *}"
   [[ -n "${default}" ]] || default="84"
   entries=()
-  for version in ${available:-54 55 56 70 71 72 73 74 80 81 82 83 84 85}; do
+  for version in ${available:-$(php_supported_versions)}; do
     entries+=("${version}|PHP $(php_version_label "${version}")")
   done
   prompt_select "Select the default CLI PHP version" "${default}" "${entries[@]}"
@@ -57,9 +57,8 @@ while :; do
   if [[ "${svc}" == "switch-cli-php" ]]; then
     require_root
     php_ver="$(choose_php_version_for_cli)"
-    switch_cli_php_version "${php_ver}"
-    echo
-    read -r -p "Press Enter to return to the menu..." _
+    run_menu_action "Switching the CLI PHP version" switch_cli_php_version "${php_ver}"
+    pause_for_menu
     continue
   fi
   [[ "${svc}" == "custom" ]] && svc="$(prompt_input "Enter the service name" "")"
@@ -69,7 +68,6 @@ while :; do
     "stop|Stop" \
     "restart|Restart" \
     "reload|Reload")"
-  service_action "${svc}" "${action}"
-  echo
-  read -r -p "Press Enter to return to the menu..." _
+  run_menu_action "The ${action} action on ${svc}" service_action "${svc}" "${action}"
+  pause_for_menu
 done

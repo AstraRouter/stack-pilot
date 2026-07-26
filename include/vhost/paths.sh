@@ -34,6 +34,36 @@ server_names() {
   fi
 }
 
+vhost_exists() {
+  [[ -f "$(vhost_conf_file "$1")" ]]
+}
+
+# True when the existing config already serves TLS, so callers can warn before
+# replacing it with an HTTP-only render.
+vhost_has_ssl() {
+  local conf
+  conf="$(vhost_conf_file "$1")"
+  [[ -f "${conf}" ]] || return 1
+  grep -Eq '^[[:space:]]*ssl_certificate[[:space:]]' "${conf}"
+}
+
+# Web root recorded in an existing config. The whole argument is kept rather
+# than the first whitespace-separated token, so a hand-edited path is reported
+# in full instead of silently truncated.
+vhost_configured_root() {
+  local conf
+  conf="$(vhost_conf_file "$1")"
+  [[ -f "${conf}" ]] || return 1
+  awk '
+    /^[[:space:]]*root[[:space:]]+/ {
+      line=$0
+      sub(/^[[:space:]]*root[[:space:]]+/, "", line)
+      sub(/[[:space:]]*;[[:space:]]*$/, "", line)
+      print line
+      exit
+    }' "${conf}"
+}
+
 # True only when path is a strict sub-directory of wwwroot_dir (so `rm -rf` during
 # vhost deletion can never escape the web root even if the conf was hand-edited).
 vhost_docroot_removable() {

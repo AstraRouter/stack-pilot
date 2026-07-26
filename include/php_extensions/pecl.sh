@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 
+# A PECL build failure is only a warning in the middle of thousands of lines of
+# compiler output, so it is also recorded here and reported again at the end of
+# the run and in install.txt. Otherwise the first sign of a missing extension is
+# a "class not found" error in production.
+LNMP_PECL_FAILURES="${LNMP_PECL_FAILURES:-}"
+
+record_pecl_failure() {
+  LNMP_PECL_FAILURES="${LNMP_PECL_FAILURES:+${LNMP_PECL_FAILURES} }php$(php_version_label "$1"):$2"
+}
+
+php_pecl_failure_summary() {
+  [[ -n "${LNMP_PECL_FAILURES:-}" ]] || return 1
+  printf '%s' "${LNMP_PECL_FAILURES}"
+}
+
 install_php_pecl_extensions() {
   local short="$1"
   local extensions="$2"
@@ -9,7 +24,7 @@ install_php_pecl_extensions() {
   pecl_bin="${prefix}/bin/pecl"
   [[ -x "${pecl_bin}" ]] || { warn "PHP ${short}: pecl was not found at ${pecl_bin}"; return 0; }
   for ext in ${extensions}; do
-    install_php_pecl_extension "${short}" "${ext}" || failed+=("${ext}")
+    install_php_pecl_extension "${short}" "${ext}" || { failed+=("${ext}"); record_pecl_failure "${short}" "${ext}"; }
   done
   if ((${#failed[@]} > 0)); then
     warn "PHP ${short}: these PECL extensions were skipped after errors and can be retried with ./addons.sh: ${failed[*]}"

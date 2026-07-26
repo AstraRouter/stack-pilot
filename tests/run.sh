@@ -18,12 +18,12 @@ while IFS= read -r shell_file; do
   if ! bash -n "${shell_file}"; then
     failures=$((failures + 1))
   fi
-done < <(find "${ROOT_DIR}" -maxdepth 3 -type f -name '*.sh' ! -name '._*' -not -path '*/src/*' | sort)
+done < <(find "${ROOT_DIR}" -type f -name '*.sh' ! -name '._*' -not -path '*/src/*' -not -path '*/.git/*' | sort)
 
 if command -v shellcheck >/dev/null 2>&1; then
   while IFS= read -r shell_file; do
     shellcheck -x "${shell_file}" || failures=$((failures + 1))
-  done < <(find "${ROOT_DIR}" -maxdepth 3 -type f -name '*.sh' ! -name '._*' -not -path '*/src/*' | sort)
+  done < <(find "${ROOT_DIR}" -type f -name '*.sh' ! -name '._*' -not -path '*/src/*' -not -path '*/.git/*' | sort)
 else
   printf 'SKIP shellcheck (not installed)\n'
 fi

@@ -51,9 +51,21 @@ install_vhost_config() {
 switch_vhost_php_version() {
   local domain="$1"
   local php_version="$2"
-  local conf port
+  local conf port candidate
   conf="$(vhost_conf_file "${domain}")"
   [[ -f "${conf}" ]] || die "Virtual host configuration does not exist: ${domain}"
+  grep -Eq 'fastcgi_pass 127\.0\.0\.1:[0-9]+;' "${conf}" ||
+    die "${domain} has no PHP handler to switch; enable PHP for the site first"
   port="$(php_fpm_port "${php_version}")"
-  sed -i.bak -E "s@fastcgi_pass 127\.0\.0\.1:[0-9]+;@fastcgi_pass 127.0.0.1:${port};@g" "${conf}"
+  candidate="$(mktemp)"
+  # Rewrite into a temporary file so the site config is validated before it is
+  # installed, and so no .conf.bak is left behind in the vhost directory where
+  # a stray *.bak could be picked up by future globbing.
+  sed -E "s@fastcgi_pass 127\.0\.0\.1:[0-9]+;@fastcgi_pass 127.0.0.1:${port};@g" "${conf}" > "${candidate}"
+  if cmp -s "${conf}" "${candidate}"; then
+    rm -f -- "${candidate}"
+    info "${domain} already uses PHP ${php_version}"
+    return 0
+  fi
+  install_vhost_config "${conf}" "${candidate}"
 }

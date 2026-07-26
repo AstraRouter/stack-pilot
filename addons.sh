@@ -52,7 +52,7 @@ while :; do
       require_root
       php_ver="$(choose_php_version_for_addons)"
       extensions="$(select_pecl_extensions)"
-      install_php_pecl_extensions "${php_ver}" "${extensions}"
+      run_menu_action "The extension installation" install_php_pecl_extensions "${php_ver}" "${extensions}"
       ;;
     2)
       php_builtin_extension_entries
@@ -62,6 +62,5 @@ while :; do
       exit 0
       ;;
   esac
-  echo
-  read -r -p "Press Enter to return to the menu..." _
+  pause_for_menu
 done

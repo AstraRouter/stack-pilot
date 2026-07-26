@@ -5,6 +5,23 @@ ok() { printf '%s\n' "${C_GREEN}$*${C_RESET}"; }
 warn() { printf '%s\n' "${C_YELLOW}$*${C_RESET}" >&2; }
 die() { printf '%s\n' "${C_RED}Error: $*${C_RESET}" >&2; exit 1; }
 
+# Remove SGR colour sequences so log files stay readable in an editor.
+strip_ansi_escapes() {
+  sed $'s/\033\\[[0-9;]*[A-Za-z]//g'
+}
+
+# Print a credential to the terminal rather than to stdout, so redirecting or
+# piping the tool's output never writes the secret to a file or a log.
+# /dev/tty can exist and still fail to open when there is no controlling
+# terminal, so the write is attempted rather than predicted, and falls back to
+# stdout. This runs at the end of a successful reset and must never be the
+# reason the caller aborts under set -e.
+print_secret() {
+  local label="$1" value="$2"
+  { printf '  %s: %s\n' "${label}" "${value}" > /dev/tty; } 2>/dev/null && return 0
+  printf '  %s: %s\n' "${label}" "${value}"
+}
+
 require_root() {
   [[ "${LNMP_ALLOW_NON_ROOT:-}" == "1" ]] && return 0
   [[ "$(id -u)" == "0" ]] || die "Run this script as root"
@@ -16,9 +33,19 @@ command_exists() {
 
 random_password() {
   local length="${1:-16}"
-  local value=""
+  local value="" chunk empty_reads=0
   while ((${#value} < length)); do
-    value+="$({ LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$((length - ${#value}))"; } 2>/dev/null || true)"
+    chunk="$({ LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$((length - ${#value}))"; } 2>/dev/null || true)"
+    value+="${chunk}"
+    # A container without /dev/urandom, or an exhausted entropy source, would
+    # otherwise leave this loop spinning silently forever.
+    if [[ -z "${chunk}" ]]; then
+      empty_reads=$((empty_reads + 1))
+      ((empty_reads < 10)) ||
+        die "Could not read randomness from /dev/urandom to generate a password; supply one explicitly"
+    else
+      empty_reads=0
+    fi
   done
   printf '%s' "${value}"
 }
@@ -55,6 +82,28 @@ wait_for_database_ready() {
     sleep 1
   done
   return 1
+}
+
+# Confirm root can actually authenticate with the password just set. MariaDB
+# 10.4+ creates root@localhost with the unix_socket plugin, so ALTER USER can
+# report success while password authentication still does not work; the failure
+# would otherwise only surface later, from backups or reset-password.
+# The password goes through a mode-600 defaults file, never the command line.
+verify_database_root_password() {
+  local client="$1" socket="$2" password="$3"
+  local credentials status=0
+  [[ -x "${client}" ]] || return 1
+  credentials="$(mktemp)"
+  chmod 600 "${credentials}"
+  # Cleaned up explicitly rather than through a RETURN trap. A RETURN trap set
+  # inside a function stays installed after that function returns and fires
+  # again when the caller returns, where the local it names no longer exists --
+  # which under set -u aborts the caller with "unbound variable".
+  # The value is quoted so a '#' in the password is not read as a comment.
+  printf '[client]\nuser=root\npassword="%s"\nsocket=%s\n' "${password}" "${socket}" > "${credentials}"
+  "${client}" --defaults-extra-file="${credentials}" -e "SELECT 1" >/dev/null 2>&1 || status=1
+  rm -f "${credentials}"
+  return "${status}"
 }
 
 # Number of parallel make jobs, capped by available memory (~1 job per 512 MB)

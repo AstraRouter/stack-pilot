@@ -23,7 +23,7 @@ case "${1:-}" in
 esac
 
 prompt_domain() {
-  local domain
+  local domain attempt=0
   while :; do
     domain="$(prompt_input "Enter the domain name" "")"
     if validate_domain "${domain}"; then
@@ -31,6 +31,8 @@ prompt_domain() {
       return 0
     fi
     warn "Invalid domain name"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "domain name"
   done
 }
 
@@ -52,7 +54,7 @@ choose_php_version() {
   default="${available%% *}"
   [[ -n "${default}" ]] || default="84"
   entries=()
-  for version in ${available:-54 55 56 70 71 72 73 74 80 81 82 83 84 85}; do
+  for version in ${available:-$(php_supported_versions)}; do
     entries+=("${version}|PHP $(php_version_label "${version}")")
   done
   prompt_select "Select the PHP version for this site" "${default}" "${entries[@]}"
@@ -76,7 +78,7 @@ default_site_root() {
 }
 
 site_root_prompt() {
-  local template="$1" default="$2" value message
+  local template="$1" default="$2" value message attempt=0
   case "${template}" in
     laravel|thinkphp) message="Enter the web root (it must directly contain public/index.php)" ;;
     *) message="Enter the web root" ;;
@@ -88,6 +90,8 @@ site_root_prompt() {
       return 0
     fi
     warn "Invalid path: use an absolute path with only letters, digits, dot, dash, underscore, and slash (no spaces or metacharacters)"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "web root path"
   done
 }
 
@@ -98,6 +102,17 @@ site_php_default() {
 add_vhost() {
   local domain aliases root_dir enable_php php_version issue_ssl email force_https template
   domain="$(prompt_domain)"
+  if vhost_exists "${domain}"; then
+    if vhost_has_ssl "${domain}"; then
+      warn "${domain} already exists and currently serves HTTPS."
+      warn "Continuing replaces its configuration, including the TLS server block."
+      warn "To keep the existing certificate, cancel and use 'Regenerate a site's SSL configuration' instead."
+    else
+      warn "${domain} already exists; continuing replaces its configuration."
+    fi
+    [[ "$(prompt_yes_no "Replace the existing configuration for ${domain}" "n")" == "y" ]] ||
+      die "Cancelled; ${domain} was left unchanged"
+  fi
   aliases="$(prompt_aliases)"
   template="$(choose_site_template php)"
   root_dir="$(site_root_prompt "${template}" "$(default_site_root "${domain}" "${template}")")"
@@ -115,8 +130,14 @@ add_vhost() {
     force_https="$(prompt_yes_no "Redirect HTTP to HTTPS" "y")"
     preflight_ssl_certificate "${domain}" "${aliases}" "${root_dir}"
     install_certbot
-    LNMP_SKIP_SSL_PREFLIGHT=1 issue_ssl_certificate "${domain}" "${aliases}" "${root_dir}" "${email}"
-    render_vhost_ssl "${domain}" "${aliases}" "${root_dir}" "${enable_php}" "${php_version:-84}" "${force_https}" "${template}"
+    # A certificate failure must not discard the working HTTP site: the SSL
+    # server block is only rendered once the certificate actually exists.
+    if LNMP_SKIP_SSL_PREFLIGHT=1 issue_ssl_certificate "${domain}" "${aliases}" "${root_dir}" "${email}"; then
+      render_vhost_ssl "${domain}" "${aliases}" "${root_dir}" "${enable_php}" "${php_version:-84}" "${force_https}" "${template}"
+    else
+      warn "No certificate was issued for ${domain}; the site stays on plain HTTP."
+      warn "Retry later with 'Request an SSL certificate for a site'."
+    fi
   fi
   reload_nginx
   ok "Site added: ${domain}"
@@ -125,14 +146,7 @@ add_vhost() {
 delete_vhost() {
   local domain remove_root root_dir
   domain="$(prompt_domain)"
-  root_dir="$(awk '
-    /^[[:space:]]*root[[:space:]]+/ {
-      line=$0
-      sub(/^[[:space:]]*root[[:space:]]+/, "", line)
-      sub(/[[:space:]]*;[[:space:]]*$/, "", line)
-      print line
-      exit
-    }' "$(vhost_conf_file "${domain}")" 2>/dev/null || true)"
+  root_dir="$(vhost_configured_root "${domain}" 2>/dev/null || true)"
   delete_vhost_config "${domain}"
   if [[ -n "${root_dir}" && -d "${root_dir}" ]]; then
     remove_root="$(prompt_yes_no "Delete the website directory ${root_dir}" "n")"
@@ -159,7 +173,7 @@ issue_ssl_for_existing() {
   domain="$(prompt_domain)"
   [[ -f "$(vhost_conf_file "${domain}")" ]] || die "Site configuration does not exist: ${domain}"
   aliases="$(prompt_aliases)"
-  root_dir="$(awk '/^[[:space:]]*root[[:space:]]+/ { gsub(/;/, "", $2); print $2; exit }' "$(vhost_conf_file "${domain}")")"
+  root_dir="$(vhost_configured_root "${domain}" 2>/dev/null || true)"
   template="$(choose_site_template php)"
   root_dir="$(site_root_prompt "${template}" "${root_dir:-$(default_site_root "${domain}" "${template}")}")"
   enable_php="$(prompt_yes_no "Enable PHP" "$(site_php_default "${template}")")"
@@ -172,7 +186,10 @@ issue_ssl_for_existing() {
   reload_nginx
   preflight_ssl_certificate "${domain}" "${aliases}" "${root_dir}"
   install_certbot
-  LNMP_SKIP_SSL_PREFLIGHT=1 issue_ssl_certificate "${domain}" "${aliases}" "${root_dir}" "${email}"
+  if ! LNMP_SKIP_SSL_PREFLIGHT=1 issue_ssl_certificate "${domain}" "${aliases}" "${root_dir}" "${email}"; then
+    reload_nginx
+    die "No certificate was issued for ${domain}; the site stays on plain HTTP"
+  fi
   render_vhost_ssl "${domain}" "${aliases}" "${root_dir}" "${enable_php}" "${php_version:-84}" "${force_https}" "${template}"
   reload_nginx
   ok "Certificate configured: ${domain}"
@@ -202,7 +219,7 @@ regenerate_ssl_for_existing() {
   domain="$(prompt_domain)"
   [[ -f "$(vhost_conf_file "${domain}")" ]] || die "Site configuration does not exist: ${domain}"
   aliases="$(prompt_aliases)"
-  root_dir="$(awk '/^[[:space:]]*root[[:space:]]+/ { gsub(/;/, "", $2); print $2; exit }' "$(vhost_conf_file "${domain}")")"
+  root_dir="$(vhost_configured_root "${domain}" 2>/dev/null || true)"
   template="$(choose_site_template php)"
   root_dir="$(site_root_prompt "${template}" "${root_dir:-$(default_site_root "${domain}" "${template}")}")"
   enable_php="$(prompt_yes_no "Enable PHP" "$(site_php_default "${template}")")"
@@ -227,16 +244,15 @@ while :; do
     "8|Regenerate a site's SSL configuration" \
     "9|Exit")"
   case "${choice}" in
-    1) add_vhost ;;
-    2) delete_vhost ;;
-    3) list_sites ;;
-    4) issue_ssl_for_existing ;;
-    5) renew_certs ;;
-    6) show_cert_status ;;
-    7) switch_php_for_existing ;;
-    8) regenerate_ssl_for_existing ;;
+    1) run_menu_action "Adding the virtual host" add_vhost ;;
+    2) run_menu_action "Deleting the virtual host" delete_vhost ;;
+    3) run_menu_action "Listing virtual hosts" list_sites ;;
+    4) run_menu_action "Requesting the certificate" issue_ssl_for_existing ;;
+    5) run_menu_action "Renewing certificates" renew_certs ;;
+    6) run_menu_action "Reading certificate status" show_cert_status ;;
+    7) run_menu_action "Switching the PHP version" switch_php_for_existing ;;
+    8) run_menu_action "Regenerating the SSL configuration" regenerate_ssl_for_existing ;;
     9) exit 0 ;;
   esac
-  echo
-  read -r -p "Press Enter to return to the menu..." _
+  pause_for_menu
 done

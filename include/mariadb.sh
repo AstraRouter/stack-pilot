@@ -23,7 +23,7 @@ install_mariadb() {
   fi
 
   local url archive build_dir extracted mariadb_password
-  url="$(mariadb_binary_url)"
+  url="$(mariadb_binary_url)" || die "No official MariaDB binary package URL is configured for this architecture ($(uname -m))"
   mariadb_password="${mariadb_password:-$(random_password 20)}"
 
   download_src "${url}" "${url##*/}" "${mariadb_sha256:-}"
@@ -35,6 +35,10 @@ install_mariadb() {
   ensure_user_group mysql mysql
   init_layout_dirs
   mkdir -p "$(dirname "${mariadb_install_dir}")" "${mariadb_data_dir}" "${mariadb_log_dir}" "${pid_dir}" "${sock_dir}"
+  # mariadbd runs as mysql and removes its pid file on clean shutdown, so it
+  # needs to create entries in both directories, not just write existing files.
+  grant_runtime_dir_access "${pid_dir}" mysql
+  grant_runtime_dir_access "${sock_dir}" mysql
   mv "${extracted}" "${mariadb_install_dir}"
   chown -R mysql:mysql "${mariadb_install_dir}" "${mariadb_data_dir}" "${mariadb_log_dir}"
 
@@ -65,6 +69,8 @@ EOF
   printf "ALTER USER 'root'@'localhost' IDENTIFIED BY %s; FLUSH PRIVILEGES;\n" "$(sql_quote_literal "${mariadb_password}")" \
     | "${mariadb_client}" -uroot -S "${mariadb_sock}" \
     || die "Failed to set the MariaDB root password; once MariaDB is running set it with: ./reset-password.sh mariadb"
+  verify_database_root_password "${mariadb_client}" "${mariadb_sock}" "${mariadb_password}" \
+    || die "The MariaDB root password was set but does not authenticate. MariaDB 10.4+ creates root@localhost with the unix_socket plugin; reset it with: ./reset-password.sh mariadb"
   write_component_version_marker "${mariadb_install_dir}" "${mariadb_ver}"
   rm -rf "${build_dir}"
 }

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The pre-upgrade backup archives options.conf and install.txt, and component
+# snapshots archive redis.conf, so every artifact this tool writes contains
+# plaintext credentials. Keep them private (new files 0600, directories 0700).
+umask 077
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${ROOT_DIR}/include/common.sh"
 load_versions

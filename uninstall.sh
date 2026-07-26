@@ -31,7 +31,8 @@ select_uninstall_components() {
     "redis|Redis" \
     "memcached|Memcached" \
     "certbot|Certbot certificate tool" \
-    "composer|Composer"
+    "composer|Composer" \
+    "fail2ban|fail2ban jails written by this installer"
 }
 
 select_php_versions_to_uninstall() {
@@ -73,7 +74,7 @@ while :; do
 
   selected_php_versions=""
   if [[ "${mode}" == "all" ]]; then
-    selected_components="nginx php mysql mariadb redis memcached certbot composer"
+    selected_components="nginx php mysql mariadb redis memcached certbot composer fail2ban"
     selected_php_versions="$(installed_php_versions 2>/dev/null || true)"
     break
   fi

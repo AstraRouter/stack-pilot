@@ -57,7 +57,7 @@ reset_mysql_password_flow() {
   mysql_password="${password}"
   save_password_option mysql_password "${password}"
   ok "The MySQL root password was reset and saved to options.conf"
-  echo "  MySQL: ${password}"
+  print_secret "MySQL" "${password}"
 }
 
 reset_mariadb_password_flow() {
@@ -71,7 +71,7 @@ reset_mariadb_password_flow() {
   mariadb_password="${password}"
   save_password_option mariadb_password "${password}"
   ok "The MariaDB root password was reset and saved to options.conf"
-  echo "  MariaDB: ${password}"
+  print_secret "MariaDB" "${password}"
 }
 
 reset_redis_password_flow() {
@@ -80,12 +80,14 @@ reset_redis_password_flow() {
   if [[ "${password}" == "__prompt__" ]]; then
     password="$(prompt_secret "Enter the new Redis password, or leave empty to disable authentication")"
   fi
+  validate_redis_password "${password}" ||
+    die "Invalid Redis password: use 6-512 characters from A-Z a-z 0-9 . _ ~ ! @ % ^ * + = : , / - (no spaces, quotes, or #)"
   confirm_action "Update the Redis password configuration" || die "Cancelled"
   reset_redis_password "${password}"
   save_password_option redis_password "${password}"
   if [[ -n "${password}" ]]; then
     ok "The Redis password was updated and saved to options.conf"
-    echo "  Redis: ${password}"
+    print_secret "Redis" "${password}"
   else
     ok "The Redis password was cleared and saved to options.conf"
   fi
@@ -101,15 +103,21 @@ run_interactive() {
       "redis|Redis password" \
       "exit|Exit")"
     case "${choice}" in
-      mysql) reset_mysql_password_flow ;;
-      mariadb) reset_mariadb_password_flow ;;
-      redis) reset_redis_password_flow ;;
+      mysql) run_menu_action "The MySQL password reset" reset_mysql_password_flow ;;
+      mariadb) run_menu_action "The MariaDB password reset" reset_mariadb_password_flow ;;
+      redis) run_menu_action "The Redis password reset" reset_redis_password_flow ;;
       exit) exit 0 ;;
     esac
-    echo
-    read -r -p "Press Enter to return to the menu..." _
+    pause_for_menu
   done
 }
+
+# A password given on the command line is recorded in shell history and is
+# visible in ps while this script runs. Interactive entry is the safe path.
+if (($# >= 2)) && [[ -n "${2:-}" ]]; then
+  warn "Passing a password as an argument leaves it in your shell history and in the process list."
+  warn "Prefer './reset-password.sh ${1}' and enter it at the prompt."
+fi
 
 case "${1:-}" in
   mysql) reset_mysql_password_flow "${2:-}" ;;

@@ -116,7 +116,6 @@ print_source_cache_status() {
   if has_component redis; then
     print_source_cache_item "Redis" "${redis_url}"
   fi
-  if has_component composer; then
-    print_source_cache_item "Composer installer" "https://getcomposer.org/installer" "composer-setup.php"
-  fi
+  # The Composer installer is deliberately absent here: it is fetched fresh on
+  # every run so it always matches the signature downloaded alongside it.
 }

@@ -25,7 +25,7 @@ cleanup_partial_mysql_install() {
 install_mysql() {
   if mysql_install_complete; then
     local detected
-    detected="$(${mysql_install_dir}/bin/mysqld --version 2>/dev/null | extract_semver || true)"
+    detected="$("${mysql_install_dir}/bin/mysqld" --version 2>/dev/null | extract_semver || true)"
     if should_skip_completed_install MySQL "${mysql_install_dir}" "${mysql_ver}" "${detected}"; then
       warn "MySQL is already installed: ${mysql_install_dir}"
       return 0
@@ -46,6 +46,10 @@ install_mysql() {
   ensure_user_group mysql mysql
   init_layout_dirs
   mkdir -p "$(dirname "${mysql_install_dir}")" "${mysql_data_dir}" "${mysql_log_dir}" "${pid_dir}" "${sock_dir}"
+  # mysqld runs as mysql and removes its pid file on clean shutdown, so it needs
+  # to create entries in both directories rather than just write existing files.
+  grant_runtime_dir_access "${pid_dir}" mysql
+  grant_runtime_dir_access "${sock_dir}" mysql
   mv "${extracted}" "${mysql_install_dir}"
   chown -R mysql:mysql "${mysql_install_dir}" "${mysql_data_dir}" "${mysql_log_dir}"
   ensure_libaio_compat
@@ -75,6 +79,8 @@ EOF
   printf "ALTER USER 'root'@'localhost' IDENTIFIED BY %s; FLUSH PRIVILEGES;\n" "$(sql_quote_literal "${mysql_password}")" \
     | "${mysql_install_dir}/bin/mysql" -uroot -S "${mysql_sock}" \
     || die "Failed to set the MySQL root password; once MySQL is running set it with: ./reset-password.sh mysql"
+  verify_database_root_password "${mysql_install_dir}/bin/mysql" "${mysql_sock}" "${mysql_password}" \
+    || die "The MySQL root password was set but does not authenticate; reset it with: ./reset-password.sh mysql"
   write_component_version_marker "${mysql_install_dir}" "${mysql_ver}"
   rm -rf "${build_dir}"
 }

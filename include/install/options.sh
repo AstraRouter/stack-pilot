@@ -13,6 +13,12 @@ save_runtime_options() {
     mysql_password mariadb_password redis_password php_versions db_engine install_redis
     install_components install_memcached install_composer
     nginx_http_port nginx_https_port mysql_port mariadb_port redis_port redis_bind redis_appendonly
+    nginx_worker_connections nginx_keepalive_timeout nginx_client_max_body_size
+    nginx_security_headers nginx_hsts_max_age nginx_http3
+    nginx_rate_limit nginx_rate_limit_rps nginx_rate_limit_burst nginx_conn_limit
+    backup_keep_days upgrade_keep_failed
+    manage_logrotate logrotate_interval logrotate_keep
+    fail2ban_bantime fail2ban_findtime fail2ban_maxretry
     memcached_install_dir composer_install_dir memcached_data_dir memcached_log_dir
     memcached_port memcached_bind memcached_memory
     php_pm php_pm_max_children php_pm_start_servers php_pm_min_spare_servers php_pm_max_spare_servers
@@ -21,7 +27,11 @@ save_runtime_options() {
     customize_service_ports manage_firewall open_database_port open_redis_port open_memcached_port
     php_security_hardening php_disable_functions
   )
+  # An options.conf written by an older release does not define keys added
+  # since. Treating that as an unbound variable would abort the run at its very
+  # last step, after everything was already installed; an empty value instead
+  # falls back to each option's own default at the point of use.
   for key in "${option_keys[@]}"; do
-    set_config_value "${file}" "${key}" "${!key}"
+    set_config_value "${file}" "${key}" "${!key-}"
   done
 }

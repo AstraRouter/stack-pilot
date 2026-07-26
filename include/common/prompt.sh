@@ -153,12 +153,61 @@ prompt_input() {
   local default="${2:-}"
   local value
   if [[ -n "${default}" ]]; then
-    read -r -p "? ${message} [${default}]: " value
+    read -r -p "? ${message} [${default}]: " value || true
     printf '%s' "${value:-${default}}"
   else
-    read -r -p "? ${message}: " value
+    read -r -p "? ${message}: " value || true
     printf '%s' "${value}"
   fi
+}
+
+# Run one interactive menu action in a subshell, so a die inside it (a failed
+# certbot run, a rejected Nginx config, a validation error) reports and returns
+# to the menu instead of terminating the whole tool.
+run_menu_action() {
+  local label="$1"
+  shift
+  ( "$@" ) && return 0
+  warn "${label} did not complete. Returning to the menu."
+  return 0
+}
+
+# Wait for the operator before redrawing a menu. EOF must not abort the tool.
+pause_for_menu() {
+  local _discard
+  echo
+  read -r -p "Press Enter to return to the menu..." _discard || true
+}
+
+# Bound a "read until the value is valid" loop. Without this, two situations
+# spin forever: standard input at EOF (a pipe, </dev/null, or Ctrl-D), where
+# every read returns immediately, and an invalid default loaded from
+# options.conf, which the loop keeps re-offering and re-rejecting.
+prompt_retry_guard() {
+  local attempt="$1"
+  local what="${2:-input}"
+  local limit="${LNMP_PROMPT_MAX_ATTEMPTS:-20}"
+  [[ "${limit}" =~ ^[1-9][0-9]*$ ]] || limit=20
+  ((attempt < limit)) && return 0
+  die "No valid ${what} after ${limit} attempts; check the configured default or provide input on a terminal"
+}
+
+# Password variant of prompt_input: the value is never echoed, so it stays out
+# of the screen and the terminal scrollback. When prompts are non-interactive
+# (tests and automation feeding stdin) this degrades to a plain read, because
+# there is no terminal to hide the input from.
+prompt_secret_input() {
+  local message="$1"
+  local value=""
+  if interactive_prompt_enabled; then
+    read -r -s -p "? ${message}: " value || true
+    # -s swallows the newline the user typed; close the line so the next
+    # prompt does not run into this one.
+    printf '\n' >&2
+  else
+    read -r value || true
+  fi
+  printf '%s' "${value}"
 }
 
 prompt_yes_no() {
@@ -171,7 +220,7 @@ prompt_yes_no() {
   fi
   [[ "${default}" == "y" ]] && suffix="Y/n" || suffix="y/N"
   while :; do
-    read -r -p "? ${message} [${suffix}]: " value
+    read -r -p "? ${message} [${suffix}]: " value || true
     if normalized="$(normalize_yes_no "${value}" "${default}")"; then
       printf '%s' "${normalized}"
       return 0
@@ -186,7 +235,7 @@ prompt_choice() {
   local default="$3"
   local value
   while :; do
-    read -r -p "? ${message} [${default}]: " value
+    read -r -p "? ${message} [${default}]: " value || true
     value="${value:-${default}}"
     if validate_choice "${value}" "${choices}"; then
       printf '%s' "${value}"

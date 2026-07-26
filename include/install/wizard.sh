@@ -3,33 +3,39 @@
 prompt_password_value() {
   local message="$1"
   local min_length="${2:-6}"
-  local value
+  local value attempt=0
   while :; do
-    value="$(prompt_input "${message} (leave empty to generate one)" "")"
+    value="$(prompt_secret_input "${message} (leave empty to generate one)")"
     if validate_password_or_random "${value}" "${min_length}"; then
       printf '%s' "${value}"
       return 0
     fi
     warn "The password must be at least ${min_length} characters and must not contain single quotes or backslashes"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "password"
   done
 }
 
 prompt_optional_password_value() {
   local message="$1"
   local min_length="${2:-6}"
-  local value
+  local value attempt=0
   while :; do
-    value="$(prompt_input "${message} (leave empty to disable authentication)" "")"
-    if validate_password_or_random "${value}" "${min_length}"; then
+    value="$(prompt_secret_input "${message} (leave empty to disable authentication)")"
+    # This prompt is only used for Redis, whose password becomes a bare token
+    # in redis.conf, so it needs the stricter character set.
+    if validate_redis_password "${value}" && validate_password_or_random "${value}" "${min_length}"; then
       printf '%s' "${value}"
       return 0
     fi
-    warn "The password must be empty or at least ${min_length} characters, without single quotes or backslashes"
+    warn "The password must be empty or ${min_length}-512 characters from A-Z a-z 0-9 . _ ~ ! @ % ^ * + = : , / - (no spaces, quotes, or #)"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "password"
   done
 }
 
 prompt_port_value() {
-  local message="$1" default="$2" value
+  local message="$1" default="$2" value attempt=0
   while :; do
     value="$(prompt_input "${message}" "${default}")"
     if validate_port "${value}"; then
@@ -37,6 +43,64 @@ prompt_port_value() {
       return 0
     fi
     warn "The port must be an integer from 1 through 65535"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "port"
+  done
+}
+
+prompt_bind_address_value() {
+  local message="$1" default="$2" value attempt=0
+  while :; do
+    value="$(prompt_input "${message}" "${default}")"
+    if validate_bind_address "${value}"; then
+      printf '%s' "${value}"
+      return 0
+    fi
+    warn "Enter an IP address or host name without spaces or shell metacharacters"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "bind address"
+  done
+}
+
+prompt_username_value() {
+  local message="$1" default="$2" value attempt=0
+  while :; do
+    value="$(prompt_input "${message}" "${default}")"
+    if validate_unix_username "${value}"; then
+      printf '%s' "${value}"
+      return 0
+    fi
+    warn "Use a lowercase account name of at most 32 characters starting with a letter or underscore (letters, digits, underscore, hyphen)"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "account name"
+  done
+}
+
+prompt_timezone_value() {
+  local message="$1" default="$2" value attempt=0
+  while :; do
+    value="$(prompt_input "${message}" "${default}")"
+    if validate_timezone "${value}"; then
+      printf '%s' "${value}"
+      return 0
+    fi
+    warn "Enter an IANA time zone such as Asia/Shanghai or UTC"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "time zone"
+  done
+}
+
+prompt_memory_mb_value() {
+  local message="$1" default="$2" value attempt=0
+  while :; do
+    value="$(prompt_input "${message}" "${default}")"
+    if validate_memory_mb "${value}"; then
+      printf '%s' "$((10#${value}))"
+      return 0
+    fi
+    warn "The memory size must be an integer from 1 through 1048576 (MB)"
+    attempt=$((attempt + 1))
+    prompt_retry_guard "${attempt}" "memory size"
   done
 }
 
@@ -62,12 +126,15 @@ validate_selected_service_ports() {
   for port in ${ports}; do
     validate_port "${port}" || { warn "Invalid service port: ${port}"; return 1; }
   done
+  # ${ports} is a space-separated list; the split into one port per line is intended.
+  # shellcheck disable=SC2086
   duplicate="$(printf '%s\n' ${ports} | sort | uniq -d | head -1)"
   [[ -z "${duplicate}" ]] || { warn "Selected services use the same port: ${duplicate}"; return 1; }
 }
 
 prompt_php_versions() {
-  local default_versions input normalized
+  local default_versions input normalized entry attempt=0
+  local entries=()
   cat >&2 <<EOF
 
 Multiple PHP versions can be installed side by side.
@@ -81,12 +148,14 @@ EOF
         return 0
       fi
       warn "Invalid PHP version selection"
+      attempt=$((attempt + 1))
+      prompt_retry_guard "${attempt}" "PHP version selection"
     done
   fi
-  normalized="$(prompt_multi_select "Select PHP versions" "${default_versions}" \
-    "54|PHP 5.4" "55|PHP 5.5" "56|PHP 5.6" \
-    "70|PHP 7.0" "71|PHP 7.1" "72|PHP 7.2" "73|PHP 7.3" "74|PHP 7.4" \
-    "80|PHP 8.0" "81|PHP 8.1" "82|PHP 8.2" "83|PHP 8.3" "84|PHP 8.4" "85|PHP 8.5")"
+  while IFS= read -r entry; do
+    entries+=("${entry}")
+  done < <(php_version_entries)
+  normalized="$(prompt_multi_select "Select PHP versions" "${default_versions}" "${entries[@]}")"
   normalize_php_versions "${normalized}"
 }
 
@@ -99,7 +168,8 @@ prompt_components() {
     "redis|Redis" \
     "memcached|Memcached" \
     "certbot|Certbot certificate client" \
-    "composer|Composer"
+    "composer|Composer" \
+    "fail2ban|fail2ban brute-force protection"
 }
 
 prompt_component_version() {

@@ -35,6 +35,8 @@ grep -q "listen 443 ssl;" "${conf}" || fail "SSL listener not rendered"
 grep -q "http2 on;" "${conf}" || fail "HTTP/2 directive not rendered"
 grep -q "ssl_certificate ${nginx_install_dir}/conf/ssl/example.com/fullchain.pem;" "${conf}" || fail "SSL certificate should use nginx ssl directory"
 grep -q "ssl_certificate_key ${nginx_install_dir}/conf/ssl/example.com/privkey.pem;" "${conf}" || fail "SSL key should use nginx ssl directory"
+# Nginx/systemd variables are matched literally; the shell must not expand them.
+# shellcheck disable=SC2016
 grep -q 'return 301 https://\$host\$request_uri;' "${conf}" || fail "HTTPS redirect not rendered"
 grep -q "location \\^~ /.well-known/acme-challenge/" "${conf}" || fail "SSL redirect vhost should keep ACME challenge location"
 

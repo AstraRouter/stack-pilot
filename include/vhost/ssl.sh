@@ -64,24 +64,38 @@ preflight_ssl_certificate() {
   [[ -z "${error}" ]] || die "${error}"
 }
 
+LNMP_LETSENCRYPT_LIVE_DIR="${LNMP_LETSENCRYPT_LIVE_DIR:-/etc/letsencrypt/live}"
+
 link_ssl_certificate() {
   local domain="$1"
-  local target_dir
+  local target_dir lineage
+  # --cert-name pins the lineage to the domain, but a directory left by an
+  # earlier run without it may carry a -0001 suffix. Prefer the exact name and
+  # fall back to the newest suffixed lineage.
+  lineage="${LNMP_LETSENCRYPT_LIVE_DIR}/${domain}"
+  if [[ ! -f "${lineage}/fullchain.pem" ]]; then
+    lineage="$(find "${LNMP_LETSENCRYPT_LIVE_DIR}" -maxdepth 1 -type d -name "${domain}-[0-9][0-9][0-9][0-9]" 2>/dev/null | sort | tail -1)"
+  fi
+  [[ -n "${lineage}" && -f "${lineage}/fullchain.pem" ]] ||
+    die "Certificate file does not exist: ${LNMP_LETSENCRYPT_LIVE_DIR}/${domain}/fullchain.pem"
+  [[ -f "${lineage}/privkey.pem" ]] ||
+    die "Certificate private key does not exist: ${lineage}/privkey.pem"
   target_dir="$(ssl_cert_dir "${domain}")"
-  [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]] || die "Certificate file does not exist: /etc/letsencrypt/live/${domain}/fullchain.pem"
-  [[ -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]] || die "Certificate private key does not exist: /etc/letsencrypt/live/${domain}/privkey.pem"
   mkdir -p "${target_dir}"
-  ln -sfn "/etc/letsencrypt/live/${domain}/fullchain.pem" "${target_dir}/fullchain.pem"
-  ln -sfn "/etc/letsencrypt/live/${domain}/privkey.pem" "${target_dir}/privkey.pem"
+  ln -sfn "${lineage}/fullchain.pem" "${target_dir}/fullchain.pem"
+  ln -sfn "${lineage}/privkey.pem" "${target_dir}/privkey.pem"
 }
 
+# Let's Encrypt allows 5 duplicate certificates per week. Re-running the wizard
+# for an unchanged site must not consume that budget, so a still-valid
+# certificate is reused and only a changed domain set triggers a reissue.
 issue_ssl_certificate() {
   local domain="$1"
   local aliases="${2:-}"
   local root_dir="$3"
   local email="$4"
   local cert_args=(-d "${domain}")
-  local alias
+  local alias output status=0
   for alias in ${aliases}; do
     cert_args+=(-d "${alias}")
   done
@@ -89,7 +103,26 @@ issue_ssl_certificate() {
     preflight_ssl_certificate "${domain}" "${aliases}" "${root_dir}"
   fi
   command_exists certbot || die "Certbot is not installed; install it from the virtual-host menu or run install.sh"
-  certbot certonly --webroot -w "${root_dir}" "${cert_args[@]}" --email "${email}" --agree-tos --non-interactive
+
+  output="$(certbot certonly --webroot -w "${root_dir}" "${cert_args[@]}" \
+    --cert-name "${domain}" --keep-until-expiring --expand \
+    --email "${email}" --agree-tos --non-interactive 2>&1)" || status=$?
+  printf '%s\n' "${output}"
+
+  if ((status != 0)); then
+    if printf '%s' "${output}" | grep -qi 'too many certificates\|rate limit'; then
+      warn "Let's Encrypt rate limit reached for ${domain}; no new certificate was issued."
+      warn "The limit is 5 duplicate certificates per week. Retry after it resets."
+    else
+      warn "Certbot failed for ${domain}; see the output above."
+    fi
+    # An existing certificate from a previous run is still usable.
+    link_ssl_certificate "${domain}" 2>/dev/null && {
+      warn "An existing certificate for ${domain} was found and will be reused."
+      return 0
+    }
+    return 1
+  fi
   link_ssl_certificate "${domain}"
 }
 

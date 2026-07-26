@@ -41,13 +41,15 @@ assert_config_file_trusted() {
   [[ -e "${file}" ]] || return 0
   # Only enforce under root; a normal user sourcing their own config is their own risk.
   [[ "$(id -u)" == "0" ]] || return 0
-  mode="$(stat -c '%a' "${file}" 2>/dev/null || stat -f '%Lp' "${file}" 2>/dev/null || echo '')"
-  if [[ -n "${mode}" ]] && (( 8#${mode} & 0022 )); then
-    die "Refusing to load ${file}: it is group/world-writable while running as root (run: chmod go-w '${file}')"
-  fi
   owner="$(stat -c '%u' "${file}" 2>/dev/null || stat -f '%u' "${file}" 2>/dev/null || echo '')"
   if [[ -n "${owner}" && "${owner}" != "0" && "${owner}" != "${SUDO_UID:-x}" ]]; then
-    die "Refusing to load ${file}: owned by uid ${owner}, not root or the sudo invoker, while running as root"
+    die "Refusing to load ${file}: it is owned by uid ${owner}, not root or the sudo invoker (chown root '${file}' to fix)"
+  fi
+  # World-writable is the unambiguous tamper signal; group-writable is safe under
+  # user-private-group umasks (0002) and is covered by the ownership check above.
+  mode="$(stat -c '%a' "${file}" 2>/dev/null || stat -f '%Lp' "${file}" 2>/dev/null || echo '')"
+  if [[ -n "${mode}" ]] && (( 8#${mode} & 0002 )); then
+    die "Refusing to load ${file}: it is world-writable while running as root (chmod o-w '${file}' to fix)"
   fi
 }
 

@@ -5,10 +5,16 @@ show_help() {
 LNMP Interactive Installer ${VERSION}
 
 Usage:
-  ./install.sh
+  ./install.sh                 Step-by-step interactive installation
+  ./install.sh --unattended    Install using the values already in options.conf,
+                               without prompting. Intended for CI and for
+                               reproducing an install on another host.
 
-The installer is step-by-step interactive. It intentionally does not require
-install choices as command-line parameters.
+Interactive mode intentionally does not accept install choices as command-line
+parameters; unattended mode reads them all from options.conf.
+
+Environment:
+  LNMP_DRY_RUN=1               Validate and report without installing anything
 EOF
 }
 
@@ -16,6 +22,7 @@ run_install_entrypoint() {
   case "${1:-}" in
     -h|--help) show_help; exit 0 ;;
     -v|--version) echo "${VERSION}"; exit 0 ;;
+    --unattended) run_unattended_install; return 0 ;;
     "") ;;
     *) warn "Installation choices are interactive; command-line arguments were ignored." ;;
   esac
@@ -27,9 +34,9 @@ run_install_entrypoint() {
   if has_component nginx; then
     nginx_ver="$(prompt_component_version Nginx "${nginx_ver}" "${nginx_versions}")"
   fi
-  timezone="$(prompt_input "Time zone" "${timezone}")"
-  user="$(prompt_input "Service user" "${user}")"
-  group="$(prompt_input "Service group" "${group}")"
+  timezone="$(prompt_timezone_value "Time zone (applied to PHP and the system clock)" "${timezone}")"
+  user="$(prompt_username_value "Service user" "${user}")"
+  group="$(prompt_username_value "Service group" "${group}")"
 
   db_engine="none"
   if has_component mysql && has_component mariadb; then
@@ -55,13 +62,13 @@ run_install_entrypoint() {
   install_redis="$(has_component redis && printf y || printf n)"
   if has_component redis; then
     redis_ver="$(prompt_component_version Redis "${redis_ver}" "${redis_versions}")"
-    redis_bind="$(prompt_input "Redis bind address" "${redis_bind}")"
+    redis_bind="$(prompt_bind_address_value "Redis bind address" "${redis_bind}")"
     redis_password="$(prompt_optional_password_value "Redis password")"
   fi
   install_memcached="$(has_component memcached && printf y || printf n)"
   if has_component memcached; then
-    memcached_bind="$(prompt_input "Memcached bind address" "${memcached_bind}")"
-    memcached_memory="$(prompt_input "Memcached memory (MB)" "${memcached_memory}")"
+    memcached_bind="$(prompt_bind_address_value "Memcached bind address" "${memcached_bind}")"
+    memcached_memory="$(prompt_memory_mb_value "Memcached memory (MB)" "${memcached_memory}")"
   fi
   install_composer="$(has_component composer && printf y || printf n)"
   customize_service_ports="$(prompt_yes_no "Change the default service ports?" "${customize_service_ports:-n}")"
@@ -104,6 +111,7 @@ run_install_entrypoint() {
   run_install
 
   ok "Installation completed."
+  report_pecl_failures
   print_passwords_to_tty
   echo "Passwords were saved to: ${ROOT_DIR}/install.txt"
   echo "Manage virtual hosts with: ./vhost.sh"

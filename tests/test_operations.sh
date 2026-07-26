@@ -65,8 +65,12 @@ php_install_base="/usr/local/services/php"
 nginx_http_port=80
 mkdir -p "${nginx_install_dir}/conf/vhost" "${nginx_log_dir}"
 render_vhost_http "laravel.test" "" "${wwwroot_dir}/laravel.test/public" "y" "84" "n" "laravel"
+# Nginx/systemd variables are matched literally; the shell must not expand them.
+# shellcheck disable=SC2016
 grep -q 'try_files $uri $uri/ /index.php?$query_string;' "${nginx_install_dir}/conf/vhost/laravel.test.conf" || fail "laravel try_files not rendered"
 render_vhost_http "think.test" "" "${wwwroot_dir}/think.test/public" "y" "84" "n" "thinkphp"
+# Nginx/systemd variables are matched literally; the shell must not expand them.
+# shellcheck disable=SC2016
 grep -q 'try_files $uri $uri/ /index.php?s=$uri&$query_string;' "${nginx_install_dir}/conf/vhost/think.test.conf" || fail "thinkphp try_files not rendered"
 
 php_install_base="${tmp_dir}/services/php"
